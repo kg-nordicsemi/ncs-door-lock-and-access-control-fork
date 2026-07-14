@@ -29,6 +29,11 @@
 #include <disambiguator.h>
 #endif // CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
 
+#ifdef CONFIG_DOOR_LOCK_DISPLAY
+#include "display/display.h"
+#include "aliro/init.h"
+#endif // CONFIG_DOOR_LOCK_DISPLAY
+
 #include <crypto_utils/crypto_utils.h>
 #include <doorlock/utils/mutex_guard.h>
 
@@ -581,11 +586,27 @@ void AccessManagerImpl::_HandleRangingSessionStateChanged(SessionContext session
 	case RangingSessionState::RangingSuspended:
 		LOG_INF("Ranging state changed to Ranging Suspended (session: %p)", sessionContext.GetRaw());
 
-		// Only update ReaderState if no other session allows open (prevents rapid toggling after Suspend).
-		SetOpenAllowed(sessionContext, false, !IsOpenAllowed());
+		// Always force CLOSED on suspend: update session state without triggering the internal
+		// callback (updateReaderState=false), then call LockAction explicitly so the lock closes
+		// even if another session's mOpenAllowed is still true.
+		SetOpenAllowed(sessionContext, false, false);
+		{
+			auto *ctx = FindRangingSession(sessionContext);
+			LockAction(false, ctx ? ctx->mAccessCredentialPublicKey : CryptoTypes::PublicKey{});
+		}
+#if defined(CONFIG_DOOR_LOCK_DISPLAY) && defined(CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION)
+		/* Suspend = user not detected; keep disambiguation icon visible but show "not detected". */
+		display_refresh_disambiguation_side(false);
+#endif // CONFIG_DOOR_LOCK_DISPLAY && CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
+#if defined(CONFIG_DOOR_LOCK_DISPLAY) && defined(CONFIG_DOOR_LOCK_BLE_UWB)
+		AliroDisplayRefreshState();
+#endif // CONFIG_DOOR_LOCK_DISPLAY && CONFIG_DOOR_LOCK_BLE_UWB
 		break;
 	case RangingSessionState::RangingResumed:
 		LOG_INF("Ranging state changed to Ranging Resumed (session: %p)", sessionContext.GetRaw());
+#if defined(CONFIG_DOOR_LOCK_DISPLAY) && defined(CONFIG_DOOR_LOCK_BLE_UWB)
+		AliroDisplayRefreshState();
+#endif // CONFIG_DOOR_LOCK_DISPLAY && CONFIG_DOOR_LOCK_BLE_UWB
 		break;
 	case RangingSessionState::Destroyed:
 		LOG_INF("Ranging state changed to Destroyed (session: %p)", sessionContext.GetRaw());
@@ -623,6 +644,10 @@ void AccessManagerImpl::_HandleRangingSessionData(SessionContext sessionContext,
 #endif // CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
 
 	SetOpenAllowed(sessionContext, openAllowed);
+#ifdef CONFIG_DOOR_LOCK_DISPLAY
+	PostDisplayDisambiguationSide();
+	PostDisplayClosestRangingDistance();
+#endif // CONFIG_DOOR_LOCK_DISPLAY
 #endif // CONFIG_DOOR_LOCK_BLE_UWB
 }
 
@@ -637,6 +662,11 @@ void AccessManagerImpl::_HandleSessionTermination(SessionContext sessionContext)
 
 	SetOpenAllowed(sessionContext, false);
 	RemoveRangingSession(sessionContext);
+#ifdef CONFIG_DOOR_LOCK_DISPLAY
+	PostDisplayClosestRangingDistance();
+	display_clear_disambiguation_side();
+	display_post_event(DISPLAY_DISCONNECTED_ACTION);
+#endif // CONFIG_DOOR_LOCK_DISPLAY
 
 #endif // CONFIG_DOOR_LOCK_BLE_UWB
 }
@@ -813,6 +843,8 @@ bool AccessManagerImpl::EvaluateUwbOpenAllowed(const UwbRangingData &uwbData, Se
 	auto *sessionCtx = FindRangingSession(sessionContext);
 	VerifyOrReturnFalse(sessionCtx, LOG_ERR("Session context not found for handle: %p", sessionContext.GetRaw()));
 
+	sessionCtx->mLastReportedDistanceCm = distance;
+
 	const bool wasOpenAllowed = sessionCtx->mOpenAllowed;
 
 #ifdef CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
@@ -843,6 +875,97 @@ bool AccessManagerImpl::DisambiguationAllowsOpen() const
 	return Aliro::Uwb::Disambiguation::Disambiguator::Instance().IsAnyUnlockAllowed();
 }
 #endif // CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
+
+#ifdef CONFIG_DOOR_LOCK_DISPLAY
+void AccessManagerImpl::PostDisplayClosestRangingDistance()
+{
+	RangingSessionContext *closestSession{ nullptr };
+	uint16_t closestDistanceCm{ UINT16_MAX };
+
+	{
+		MutexGuard lock{ sMutex };
+		RangingSessionContext *sessionCtx{};
+
+		SYS_SLIST_FOR_EACH_CONTAINER (&mActiveSessions, sessionCtx, mNode) {
+			if (!sessionCtx->mLastReportedDistanceCm.has_value()) {
+				continue;
+			}
+
+#ifdef CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
+			const auto disambiguationIdx =
+				Uwb::UltraWideBandInstance().GetDisambiguationSessionIdx(sessionCtx->mSessionContext);
+			if (!disambiguationIdx.has_value()) {
+				continue;
+			}
+			const auto result =
+				Aliro::Uwb::Disambiguation::Disambiguator::Instance().TryGetLastResult(*disambiguationIdx);
+			if (!result.has_value() || !result->IsFront()) {
+				continue;
+			}
+#endif // CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
+
+			const uint16_t distanceCm = sessionCtx->mLastReportedDistanceCm.value();
+			if (distanceCm < closestDistanceCm) {
+				closestDistanceCm = distanceCm;
+				closestSession = sessionCtx;
+			}
+		}
+	}
+
+	if (!closestSession) {
+		return;
+	}
+
+#ifdef CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
+	const uint32_t threshold = closestSession->mOpenAllowed
+		? (mMaxAllowedDistance + mMaxAllowedDistanceExitMargin)
+		: static_cast<uint32_t>(CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_SECURE_BUBBLE_CM);
+#else
+	const uint32_t threshold = closestSession->mOpenAllowed
+		? (mMaxAllowedDistance + mMaxAllowedDistanceExitMargin)
+		: mMaxAllowedDistance;
+#endif // CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
+
+	display_post_distance_update({ static_cast<int32_t>(closestDistanceCm), static_cast<int32_t>(threshold) });
+}
+
+void AccessManagerImpl::PostDisplayDisambiguationSide()
+{
+	bool isFront = false;
+	bool anySession = false;
+
+	{
+		MutexGuard lock{ sMutex };
+		RangingSessionContext *sessionCtx{};
+
+		SYS_SLIST_FOR_EACH_CONTAINER (&mActiveSessions, sessionCtx, mNode) {
+#ifdef CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
+			const auto idx =
+				Uwb::UltraWideBandInstance().GetDisambiguationSessionIdx(sessionCtx->mSessionContext);
+			if (!idx.has_value()) {
+				continue;
+			}
+			const auto result = Aliro::Uwb::Disambiguation::Disambiguator::Instance().TryGetLastResult(*idx);
+			if (result.has_value()) {
+				anySession = true;
+				if (result->IsFront()) {
+					isFront = true;
+					break;
+				}
+			}
+#else
+			anySession = true;
+			ARG_UNUSED(sessionCtx);
+			break;
+#endif // CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
+		}
+	}
+
+	if (anySession) {
+		display_post_disambiguation_side(isFront);
+	}
+}
+#endif // CONFIG_DOOR_LOCK_DISPLAY
 
 std::optional<uint16_t> AccessManagerImpl::ExtractDistanceFromUwbData(const UwbRangingData &uwbData) const
 {

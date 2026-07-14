@@ -30,7 +30,18 @@ config DOOR_LOCK_RELEASE
       Shell commands are disabled.
       Device reset automatically on fatal error.
 
+config DOOR_LOCK_DISPLAY
+	bool "Enable display"
+	help
+	  Enables the TFT display with distance, disambiguation side, and lock state visualization.
+	  Use the 'display' snippet to activate this option together with the required board overlay
+	  and LVGL configuration.
+
 rsource "src/Kconfig"
+
+if DOOR_LOCK_DISPLAY
+rsource "src/display/Kconfig"
+endif # DOOR_LOCK_DISPLAY
 
 rsource "Kconfig.defconfig"
 

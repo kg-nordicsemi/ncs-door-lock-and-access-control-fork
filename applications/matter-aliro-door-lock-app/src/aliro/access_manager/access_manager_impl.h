@@ -31,6 +31,13 @@ class AccessManagerImpl final : public AccessManager {
 public:
 	void SetKpersistentManager(KpersistentManager *kpersistentManager) { mKpersistentManager = kpersistentManager; }
 
+#ifdef CONFIG_DOOR_LOCK_DISPLAY
+	/** Posts the distance of the nearest FRONT-classified session to the display. */
+	void PostDisplayClosestRangingDistance();
+	/** Posts the current FRONT/BACK side of any active session to the display. */
+	void PostDisplayDisambiguationSide();
+#endif // CONFIG_DOOR_LOCK_DISPLAY
+
 private:
 	friend class AccessManager;
 	friend AccessManager &AccessManagerInstance();
@@ -334,6 +341,7 @@ private:
 		SessionContext mSessionContext;
 		bool mOpenAllowed{ false };
 		CryptoTypes::PublicKey mAccessCredentialPublicKey;
+		std::optional<uint16_t> mLastReportedDistanceCm{};
 #ifdef CONFIG_DOOR_LOCK_ACCESS_MANAGER_TERMINATE_SESSION_ON_TIMEOUT
 		Timer mRangingSessionTimer;
 #endif // CONFIG_DOOR_LOCK_ACCESS_MANAGER_TERMINATE_SESSION_ON_TIMEOUT

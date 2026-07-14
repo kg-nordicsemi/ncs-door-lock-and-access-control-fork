@@ -8,6 +8,10 @@
 #include "bolt_lock_manager.h"
 #include "clusters/identify.h"
 
+#ifdef CONFIG_DOOR_LOCK_DISPLAY
+#include "display/display.h"
+#endif // CONFIG_DOOR_LOCK_DISPLAY
+
 #include "app/matter_init.h"
 #include "app/task_executor.h"
 
@@ -56,7 +60,11 @@ constexpr uint16_t kAdvertisingIntervalMax{ 500 };
 #endif // CONFIG_DOOR_LOCK_NUS_SERVICE || CONFIG_DOOR_LOCK_DFU_SMP_SERVICE
 
 #define APPLICATION_BUTTON_MASK DK_BTN2_MSK
+#ifdef CONFIG_DOOR_LOCK_BLE_UWB
+#define MODE_SWITCH_BUTTON_MASK DK_BTN3_MSK
+#else
 #define DFU_SMP_BUTTON_MASK DK_BTN3_MSK
+#endif // CONFIG_DOOR_LOCK_BLE_UWB
 
 #ifndef CONFIG_CHIP_FACTORY_RESET_ERASE_SETTINGS
 void AppEventHandler(const ChipDeviceEvent *event, [[maybe_unused]] intptr_t)
@@ -88,11 +96,22 @@ void AppTask::ButtonEventHandler(Nrf::ButtonState state, Nrf::ButtonMask hasChan
 		Nrf::PostTask([] { LockActionEventHandler(); });
 	}
 
+#ifdef CONFIG_DOOR_LOCK_BLE_UWB
+	if ((MODE_SWITCH_BUTTON_MASK & hasChanged) & state) {
+		AliroToggleTransportMode();
+#ifdef CONFIG_DOOR_LOCK_DISPLAY
+		display_post_op_mode_change(GetTransportMode() == TransportMode::Nfc);
+#endif // CONFIG_DOOR_LOCK_DISPLAY
+		LOG_WRN("Transport mode toggled to %s",
+			GetTransportMode() == TransportMode::BleUwb ? "BLE+UWB" : "NFC");
+	}
+#else
 #ifdef CONFIG_DOOR_LOCK_DFU_SMP_SERVICE
 	if ((DFU_SMP_BUTTON_MASK & hasChanged) & state) {
 		Nrf::PostTask([] { DfuSmpActionEventHandler(); });
 	}
 #endif // CONFIG_DOOR_LOCK_DFU_SMP_SERVICE
+#endif // CONFIG_DOOR_LOCK_BLE_UWB
 }
 
 void AppTask::LockActionEventHandler()
@@ -131,6 +150,9 @@ void AppTask::LockStateChanged(const BoltLockManager::StateData &stateData)
 #ifdef CONFIG_DOOR_LOCK_NUS_SERVICE
 		DoorLock::NUSService::Send("locked");
 #endif // CONFIG_DOOR_LOCK_NUS_SERVICE
+#ifdef CONFIG_DOOR_LOCK_DISPLAY
+		display_post_event(DISPLAY_LOCK_ACTION);
+#endif // CONFIG_DOOR_LOCK_DISPLAY
 		break;
 	case Aliro::ReaderStateByte::EnteringUnsecured:
 		LOG_INF("Unlock action initiated");
@@ -145,6 +167,9 @@ void AppTask::LockStateChanged(const BoltLockManager::StateData &stateData)
 #ifdef CONFIG_DOOR_LOCK_NUS_SERVICE
 		DoorLock::NUSService::Send("unlocked");
 #endif // CONFIG_DOOR_LOCK_NUS_SERVICE
+#ifdef CONFIG_DOOR_LOCK_DISPLAY
+		display_post_event(DISPLAY_UNLOCK_ACTION);
+#endif // CONFIG_DOOR_LOCK_DISPLAY
 #ifdef CONFIG_DOOR_LOCK_BLE_UWB
 		DoorLock::AliroService::BlockAdvertising(DoorLock::AliroService::AdvertisingBlockReason::DoorUnlocked);
 #endif // CONFIG_DOOR_LOCK_BLE_UWB

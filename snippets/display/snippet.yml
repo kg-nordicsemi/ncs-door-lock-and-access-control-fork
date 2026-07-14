@@ -1,0 +1,14 @@
+#
+# Copyright (c) 2025 Nordic Semiconductor ASA
+#
+# SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
+#
+
+name: display
+append:
+  EXTRA_CONF_FILE: display.conf
+
+boards:
+  /nrf54lm20dk\/nrf54lm20[ab]\/cpuapp/:
+    append:
+      EXTRA_DTC_OVERLAY_FILE: boards/nrf54lm20dk_cpuapp.overlay

@@ -11,6 +11,7 @@ project(door-lock-app)
 
 add_subdirectory(src/aliro)
 add_subdirectory(src/matter)
+add_subdirectory_ifdef(CONFIG_DOOR_LOCK_DISPLAY src/display)
 
 file(GLOB app_sources CONFIGURE_DEPENDS src/*.cpp)
 target_sources(app PRIVATE ${app_sources})

@@ -1,0 +1,17 @@
+#
+# Copyright (c) 2026 Nordic Semiconductor ASA
+#
+# SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
+#
+
+config DISPLAY_THREAD_PRIORITY
+	int "Maximum length of single command in Bytes"
+	default 11
+	help
+	  Priority of the display thread.
+
+config DISPLAY_THREAD_STACK_SIZE
+	int "Stack size of the display thread"
+	default 4096
+	help
+	  Stack size of the display thread.

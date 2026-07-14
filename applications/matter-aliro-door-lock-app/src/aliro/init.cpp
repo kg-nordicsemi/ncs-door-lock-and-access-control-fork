@@ -9,6 +9,11 @@
 #include "aliro/types.h"
 #include "aliro/utils.h"
 #include "nfc/nfc_transport_rfal.h"
+#include "init.h"
+
+#ifdef CONFIG_DOOR_LOCK_DISPLAY
+#include "display/display.h"
+#endif // CONFIG_DOOR_LOCK_DISPLAY
 
 #include <reader_storage/reader.h>
 
@@ -40,6 +45,12 @@
 #include "shell.h"
 #endif // CONFIG_DOOR_LOCK_CLI
 
+#ifdef CONFIG_CHIP
+#include "matter/bolt_lock_manager.h"
+#endif // CONFIG_CHIP
+
+#include "access_manager/access_manager_impl.h"
+
 #include "aliro_state_control.h"
 #include "storage.h"
 #include "storage_keys.h"
@@ -66,6 +77,60 @@ KpersistentManagerImpl sKpersistentManagerImpl;
 namespace {
 
 bool sAliroRunning{ false };
+
+#ifdef CONFIG_DOOR_LOCK_BLE_UWB
+TransportMode sTransportMode{ TransportMode::BleUwb };
+
+AliroError StartBleUwbTransport()
+{
+	if (sTransportMode != TransportMode::BleUwb) {
+		return ALIRO_NO_ERROR;
+	}
+
+	const int rc = DoorLock::AliroService::Start();
+	VerifyOrReturnStatus(rc == 0 || rc == -EALREADY, ALIRO_ERROR_INTERNAL,
+			     LOG_ERR("Failed to start Aliro service: %d", rc));
+	return ALIRO_NO_ERROR;
+}
+
+AliroError StopBleUwbTransport()
+{
+	if (sTransportMode != TransportMode::BleUwb) {
+		return ALIRO_NO_ERROR;
+	}
+
+	const int rc = DoorLock::AliroService::Stop();
+	VerifyOrReturnStatus(rc == 0 || rc == -EALREADY, ALIRO_ERROR_INTERNAL,
+			     LOG_ERR("Failed to stop Aliro service: %d", rc));
+	return ALIRO_NO_ERROR;
+}
+#endif // CONFIG_DOOR_LOCK_BLE_UWB
+
+AliroError StartNfcTransport()
+{
+#ifdef CONFIG_DOOR_LOCK_BLE_UWB
+	if (sTransportMode != TransportMode::Nfc) {
+		return ALIRO_NO_ERROR;
+	}
+#endif // CONFIG_DOOR_LOCK_BLE_UWB
+
+	const auto ec = NfcTransportRfal::Instance().Start();
+	VerifyOrReturnStatus(ec == ALIRO_NO_ERROR, ec, LOG_ERR("NFC transport start failed"));
+	return ALIRO_NO_ERROR;
+}
+
+AliroError StopNfcTransport()
+{
+#ifdef CONFIG_DOOR_LOCK_BLE_UWB
+	if (sTransportMode != TransportMode::Nfc) {
+		return ALIRO_NO_ERROR;
+	}
+#endif // CONFIG_DOOR_LOCK_BLE_UWB
+
+	const auto ec = NfcTransportRfal::Instance().Stop();
+	VerifyOrReturnStatus(ec == ALIRO_NO_ERROR, ec, LOG_ERR("NFC transport stop failed"));
+	return ALIRO_NO_ERROR;
+}
 
 constexpr uint8_t GetApplicationFeatures()
 {
@@ -156,18 +221,70 @@ int AliroInit()
 
 	PrintAliroFeatures(AliroStack::Instance().GetFeatures(), GetApplicationFeatures());
 
+#ifdef CONFIG_DOOR_LOCK_DISPLAY
+	display_init();
+	display_post_event(DISPLAY_LOCK_ACTION);
+#ifdef CONFIG_DOOR_LOCK_BLE_UWB
+	display_post_op_mode_change(GetTransportMode() == TransportMode::Nfc);
+#endif // CONFIG_DOOR_LOCK_BLE_UWB
+#endif // CONFIG_DOOR_LOCK_DISPLAY
+
 	LOG_INF("Aliro stack initialized");
 
 	return EXIT_SUCCESS;
 }
 
+#if defined(CONFIG_DOOR_LOCK_DISPLAY) && defined(CONFIG_DOOR_LOCK_BLE_UWB)
+
+void AliroDisplayRefreshState()
+{
+#ifdef CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
+	AccessManagerInstanceImpl().PostDisplayDisambiguationSide();
+#endif // CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
+#ifdef CONFIG_CHIP
+	display_refresh_lock_state(!BoltLockMgr().IsLocked());
+#endif // CONFIG_CHIP
+}
+
+#endif // CONFIG_DOOR_LOCK_DISPLAY && CONFIG_DOOR_LOCK_BLE_UWB
+
+#ifdef CONFIG_DOOR_LOCK_BLE_UWB
+
+void AliroToggleTransportMode()
+{
+	if (sAliroRunning) {
+		StopNfcTransport();
+#ifdef CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
+		if (sTransportMode == TransportMode::BleUwb) {
+			Aliro::Uwb::UltraWideBandInstance().StopRadarSession();
+		}
+#endif // CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
+		StopBleUwbTransport();
+	}
+
+	if (sTransportMode == TransportMode::BleUwb) {
+		sTransportMode = TransportMode::Nfc;
+	} else {
+		sTransportMode = TransportMode::BleUwb;
+	}
+
+	if (sAliroRunning) {
+		StartNfcTransport();
+		StartBleUwbTransport();
+	}
+}
+
+TransportMode GetTransportMode()
+{
+	return sTransportMode;
+}
+
+#endif // CONFIG_DOOR_LOCK_BLE_UWB
+
 int AliroStart()
 {
-	AliroError ec = NfcTransportRfal::Instance().Start();
-	if (ec != ALIRO_NO_ERROR) {
-		LOG_ERR("NFC transport start failed");
-		return EXIT_FAILURE;
-	}
+	AliroError ec = StartNfcTransport();
+	VerifyOrReturnValue(ec == ALIRO_NO_ERROR, EXIT_FAILURE);
 
 #ifdef CONFIG_DOOR_LOCK_BLE_UWB
 
@@ -179,9 +296,8 @@ int AliroStart()
 		VerifyOrReturnValue(ec == ALIRO_NO_ERROR, EXIT_FAILURE, LOG_ERR("Cannot set Group Resolving Key"));
 	}
 
-	const int aliroServiceStartRc = DoorLock::AliroService::Start();
-	VerifyOrReturnValue(aliroServiceStartRc == 0, EXIT_FAILURE,
-			    LOG_ERR("Failed to start Aliro service: %d", aliroServiceStartRc));
+	ec = StartBleUwbTransport();
+	VerifyOrReturnValue(ec == ALIRO_NO_ERROR, EXIT_FAILURE, LOG_ERR("Failed to start BLE/UWB transport"));
 
 #endif // CONFIG_DOOR_LOCK_BLE_UWB
 
@@ -193,16 +309,17 @@ int AliroStop()
 {
 	int rc = EXIT_SUCCESS;
 
-	AliroError ec = NfcTransportRfal::Instance().Stop();
+	AliroError ec = StopNfcTransport();
 	if (ec != ALIRO_NO_ERROR) {
 		LOG_ERR("NFC transport stop failed");
+		rc = EXIT_FAILURE;
 	}
 
 #ifdef CONFIG_DOOR_LOCK_BLE_UWB
 
-	const int aliroServiceStopRc = DoorLock::AliroService::Stop();
-	if (aliroServiceStopRc != 0) {
-		LOG_ERR("Failed to stop Aliro service: %d", aliroServiceStopRc);
+	ec = StopBleUwbTransport();
+	if (ec != ALIRO_NO_ERROR) {
+		LOG_ERR("Failed to stop BLE/UWB transport");
 		rc = EXIT_FAILURE;
 	}
 
