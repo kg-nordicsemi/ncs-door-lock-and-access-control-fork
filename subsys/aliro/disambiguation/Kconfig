@@ -27,8 +27,8 @@ config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_MAX_CIR
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_P_RATIO
 	int "p_ratio threshold for disambiguation"
 	default 7500 if DOOR_LOCK_ALIRO_UWB_QM35_ANTENNA_4PORT
-	default 6000 if DOOR_LOCK_ALIRO_UWB_QM35_ANTENNA_2PORT
-	default 7500
+	default 5300 if DOOR_LOCK_ALIRO_UWB_QM35_ANTENNA_2PORT
+	default 6300
 	range 1 30000
 	help
 	  Minimum p_ratio for FRONT detection. The value is multiplied by 10000
