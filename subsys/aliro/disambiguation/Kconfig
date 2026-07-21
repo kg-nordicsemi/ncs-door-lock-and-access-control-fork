@@ -17,7 +17,7 @@ if DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_MAX_CIR
 	int "Max CIR threshold for disambiguation"
-	default 800
+	default 1500
 	range 100 5000
 	help
 	  Maximum absolute CIR value. When the radar CIR exceeds this threshold,
@@ -38,7 +38,7 @@ config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_P_RATIO
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_NB_BLOCKS
 	int "Max noise blocks threshold for disambiguation"
-	default 10
+	default 6
 	range 0 40
 	help
 	  Maximum number of noise blocks allowed for a FRONT decision.

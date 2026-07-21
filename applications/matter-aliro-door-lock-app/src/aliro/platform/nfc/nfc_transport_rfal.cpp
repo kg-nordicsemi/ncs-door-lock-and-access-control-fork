@@ -5,6 +5,7 @@
  */
 
 #include "nfc_transport_rfal.h"
+#include "ncs_pal_timer.h"
 #include <rfal_ncs_pal.h>
 #include <rfal_nfc_config.h>
 
@@ -211,6 +212,14 @@ AliroError NfcTransportRfal::Init()
 
 AliroError NfcTransportRfal::Start()
 {
+	/* Reset the PAL timer pool before each RFAL start so that timers leaked
+	 * during a previous NFC session (e.g. stopped mid-transaction) do not
+	 * accumulate across Stop/Start cycles triggered by mode toggles (btn3).
+	 * Uses ncs_pal_timers_reset() (k_timer_stop) instead of
+	 * ncs_pal_timers_init() (k_timer_init) to avoid corrupting the kernel
+	 * timer list if any timer object is still referenced by the RFAL worker. */
+	ncs_pal_timers_reset();
+
 	VerifyOrReturnStatus(RfalNfcInit() == RFAL_ERR_NONE, ALIRO_ERROR_INTERNAL,
 			     LOG_ERR("RFAL: NFC initialization failed"));
 
@@ -231,6 +240,14 @@ AliroError NfcTransportRfal::Stop()
 	ReturnCode err = rfalNfcDeactivate(RFAL_NFC_DEACTIVATE_IDLE);
 	VerifyOrReturnStatus(err == RFAL_ERR_NONE || err == RFAL_ERR_WRONG_STATE, ALIRO_ERROR_INTERNAL,
 			     LOG_ERR("RFAL: NFC deactivation failed, return code: %d", err));
+
+	/* Reset the PAL timer pool. RFAL may leave timers marked as in-use when
+	 * stopped mid-transaction. Uses ncs_pal_timers_reset() (k_timer_stop)
+	 * rather than ncs_pal_timers_init() (k_timer_init) because the RFAL
+	 * worker thread may still hold a reference to a timer object at this
+	 * point: re-initializing a timer that is still queued in the kernel
+	 * timeout list corrupts the sys_dlist and causes a hard fault. */
+	ncs_pal_timers_reset();
 
 	atomic_clear(&mStarted);
 	return ALIRO_NO_ERROR;

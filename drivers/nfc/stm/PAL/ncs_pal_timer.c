@@ -34,6 +34,16 @@ void ncs_pal_timers_init()
 	LOG_DBG("%d timers initialized", timer_id + 1);
 }
 
+void ncs_pal_timers_reset()
+{
+	int timer_id = 0;
+	for (timer_id = 0; timer_id < CONFIG_RFAL_MAX_TIMERS_NUM; timer_id++) {
+		k_timer_stop(&timers[timer_id].timer);
+		timers[timer_id].in_use = false;
+	}
+	LOG_DBG("%d timers reset", timer_id + 1);
+}
+
 int ncs_pal_timer_create(uint16_t time_ms)
 {
 	int timer_id = 0;

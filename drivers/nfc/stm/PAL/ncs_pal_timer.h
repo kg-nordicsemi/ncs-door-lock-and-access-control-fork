@@ -12,9 +12,18 @@ extern "C" {
 #endif
 
 /**
- * @brief Initializes the PAL timers.
+ * @brief Initializes the PAL timers. Call once at boot.
  */
 void ncs_pal_timers_init();
+
+/**
+ * @brief Stops and releases all PAL timers without re-initializing them.
+ *
+ * Required for NFC/UWB mode switching: stops any timers left over from a
+ * previous NFC session without calling k_timer_init(), which would corrupt
+ * the kernel timer list if the RFAL worker is still referencing a timer.
+ */
+void ncs_pal_timers_reset();
 
 /**
  * @brief Get current system uptime, in milliseconds.

@@ -77,11 +77,16 @@ void BoltLockManager::Init(StateChangeCallback callback)
 					isNfcSession ? Aliro::OperationSource::ThisUserDeviceInNfc :
 						       Aliro::OperationSource::ThisUserDeviceInBluetoothLeUwbAliroFlow;
 
-				Nullable<ValidateCredentialResult> result;
-				const auto success = ValidateAliroCredential(accessCredentialPublicKey, result);
-				VerifyOrReturn(success);
-
-				Nrf::PostTask([source, result] {
+				/* ValidateAliroCredential() calls LockChipStack() which must not be
+				 * invoked synchronously from a BLE/system-work-queue callback — doing
+				 * so risks a deadlock when the Matter thread already holds the lock and
+				 * is itself waiting for BLE teardown to complete.  Defer the entire
+				 * validation + lock/unlock sequence to the Matter thread via PostTask. */
+				Nrf::PostTask([source, accessCredentialPublicKey] {
+					Nullable<ValidateCredentialResult> result;
+					const auto success =
+						ValidateAliroCredential(accessCredentialPublicKey, result);
+					VerifyOrReturn(success);
 					if (!BoltLockMgr().Unlock(source, result)) {
 #ifdef CONFIG_DOOR_LOCK_BLE_UWB
 						// The lock is already unlocked, so we can send the Unsecured state
@@ -98,11 +103,15 @@ void BoltLockManager::Init(StateChangeCallback callback)
 					isNfcSession ? Aliro::OperationSource::ThisUserDeviceInNfc :
 						       Aliro::OperationSource::ThisUserDeviceInBluetoothLeUwbAliroFlow;
 
-				Nullable<ValidateCredentialResult> result;
-				const auto success = ValidateAliroCredential(accessCredentialPublicKey, result);
-				VerifyOrReturn(success);
-
-				Nrf::PostTask([source, result] { BoltLockMgr().Lock(source, result); });
+				/* Same reasoning as mUnlockIndicatorClb: defer ValidateAliroCredential()
+				 * (which calls LockChipStack) to the Matter thread to avoid deadlock. */
+				Nrf::PostTask([source, accessCredentialPublicKey] {
+					Nullable<ValidateCredentialResult> result;
+					const auto success =
+						ValidateAliroCredential(accessCredentialPublicKey, result);
+					VerifyOrReturn(success);
+					BoltLockMgr().Lock(source, result);
+				});
 			},
 	});
 

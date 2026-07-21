@@ -79,7 +79,7 @@ namespace {
 bool sAliroRunning{ false };
 
 #ifdef CONFIG_DOOR_LOCK_BLE_UWB
-TransportMode sTransportMode{ TransportMode::BleUwb };
+TransportMode sTransportMode{ TransportMode::Nfc };
 
 AliroError StartBleUwbTransport()
 {

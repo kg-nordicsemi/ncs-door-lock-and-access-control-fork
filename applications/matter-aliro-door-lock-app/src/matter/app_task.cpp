@@ -98,12 +98,20 @@ void AppTask::ButtonEventHandler(Nrf::ButtonState state, Nrf::ButtonMask hasChan
 
 #ifdef CONFIG_DOOR_LOCK_BLE_UWB
 	if ((MODE_SWITCH_BUTTON_MASK & hasChanged) & state) {
-		AliroToggleTransportMode();
+		/* AliroToggleTransportMode() calls AliroService::Stop() which uses
+		 * k_work_cancel_sync() on work items (sRestartAdvertisingWork etc.)
+		 * that run on the system work queue.  Calling k_work_cancel_sync()
+		 * from the same system work queue (button handler) risks a deadlock
+		 * when those items are running concurrently (e.g. right after a BLE
+		 * connection event).  Defer to the Matter thread where it is safe. */
+		Nrf::PostTask([] {
+			AliroToggleTransportMode();
 #ifdef CONFIG_DOOR_LOCK_DISPLAY
-		display_post_op_mode_change(GetTransportMode() == TransportMode::Nfc);
+			display_post_op_mode_change(GetTransportMode() == TransportMode::Nfc);
 #endif // CONFIG_DOOR_LOCK_DISPLAY
-		LOG_WRN("Transport mode toggled to %s",
-			GetTransportMode() == TransportMode::BleUwb ? "BLE+UWB" : "NFC");
+			LOG_WRN("Transport mode toggled to %s",
+				GetTransportMode() == TransportMode::BleUwb ? "BLE+UWB" : "NFC");
+		});
 	}
 #else
 #ifdef CONFIG_DOOR_LOCK_DFU_SMP_SERVICE
