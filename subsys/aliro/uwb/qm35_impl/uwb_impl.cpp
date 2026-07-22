@@ -259,37 +259,53 @@ void UltraWideBandImpl::SessionHandlerCallback(aliro_uwb_session_event *event, v
 			const auto newState = status->session_state;
 			const auto reason = status->reason_code;
 
-			switch (oldState) {
-			case CHERRY_CCC_SESSION_STATE_INIT:
-				if (newState == CHERRY_CCC_SESSION_STATE_INIT) {
-					sessionCtx->mRangingSessionState = RangingSessionState::Initialized;
-				} else if (newState == CHERRY_CCC_SESSION_STATE_IDLE) {
-					sessionCtx->mRangingSessionState = RangingSessionState::Idle;
-				}
-				break;
-			case CHERRY_CCC_SESSION_STATE_IDLE:
-				if (newState == CHERRY_CCC_SESSION_STATE_ACTIVE) {
-					if (sessionCtx->mRangingSessionState == RangingSessionState::Idle) {
-						sessionCtx->mRangingSessionState = RangingSessionState::Ranging;
-					} else if (sessionCtx->mRangingSessionState ==
-						   RangingSessionState::RangingSuspended) {
-						sessionCtx->mRangingSessionState = RangingSessionState::RangingResumed;
+			/* DEINIT can arrive from any Cherry session state (e.g. error 10 -
+			 * CHERRY_ERR_SESSION_ACTIVE fires while the session is ACTIVE during a
+			 * Suspend/Resume cycle). Handle it uniformly before the per-state switch so
+			 * that the SessionContext is always torn down and removed from the active
+			 * list, preventing a dangling pointer that would corrupt the heap on the
+			 * next BLE disconnect.
+			 *
+			 * Null mUwbSessionContext immediately: aliro_ccc_cb will call qfree() on the
+			 * Qorvo session object after this callback returns, so the pointer will be
+			 * dangling.  DestroySession() checks for nullptr and skips the call to
+			 * aliro_uwb_session_destroy(), preventing a use-after-free when
+			 * _HandleSessionTermination fires on subsequent BLE disconnect. */
+			if (newState == CHERRY_CCC_SESSION_STATE_DEINIT) {
+				sessionCtx->mRangingSessionState = RangingSessionState::Destroyed;
+				sessionCtx->mUwbSessionContext = nullptr;
+			} else
+				switch (oldState) {
+				case CHERRY_CCC_SESSION_STATE_INIT:
+					if (newState == CHERRY_CCC_SESSION_STATE_INIT) {
+						sessionCtx->mRangingSessionState = RangingSessionState::Initialized;
+					} else if (newState == CHERRY_CCC_SESSION_STATE_IDLE) {
+						sessionCtx->mRangingSessionState = RangingSessionState::Idle;
 					}
-				} else if (newState == CHERRY_CCC_SESSION_STATE_DEINIT) {
-					sessionCtx->mRangingSessionState = RangingSessionState::Destroyed;
+					break;
+				case CHERRY_CCC_SESSION_STATE_IDLE:
+					if (newState == CHERRY_CCC_SESSION_STATE_ACTIVE) {
+						if (sessionCtx->mRangingSessionState == RangingSessionState::Idle) {
+							sessionCtx->mRangingSessionState = RangingSessionState::Ranging;
+						} else if (sessionCtx->mRangingSessionState ==
+							   RangingSessionState::RangingSuspended) {
+							sessionCtx->mRangingSessionState =
+								RangingSessionState::RangingResumed;
+						}
+					}
+					break;
+				case CHERRY_CCC_SESSION_STATE_ACTIVE:
+					if (newState == CHERRY_CCC_SESSION_STATE_IDLE) {
+						sessionCtx->mRangingSessionState =
+							RangingSessionState::RangingSuspended;
+					}
+					break;
+				default:
+					LOG_ERR("Unknown old state: %u, new state: %u", static_cast<uint32_t>(oldState),
+						static_cast<uint32_t>(newState));
+					// Should not happen, but if it does, set the state to uninitialized.
+					sessionCtx->mRangingSessionState = RangingSessionState::Uninitialized;
 				}
-				break;
-			case CHERRY_CCC_SESSION_STATE_ACTIVE:
-				if (newState == CHERRY_CCC_SESSION_STATE_IDLE) {
-					sessionCtx->mRangingSessionState = RangingSessionState::RangingSuspended;
-				}
-				break;
-			default:
-				LOG_ERR("Unknown old state: %u, new state: %u", static_cast<uint32_t>(oldState),
-					static_cast<uint32_t>(newState));
-				// Should not happen, but if it does, set the state to uninitialized.
-				sessionCtx->mRangingSessionState = RangingSessionState::Uninitialized;
-			}
 
 #ifdef CONFIG_DOOR_LOCK_ALIRO_UWB_SESSION_LOGGING
 
@@ -485,6 +501,8 @@ int UltraWideBandImpl::_Init(const Callbacks &callbacks)
 	mCtx = cherry_create("qm35", &UwbCoreCallback, this);
 	VerifyOrReturnValue(mCtx, -ENODEV, LOG_ERR("Failed to create Cherry context"));
 
+	cherry_set_log_level(mCtx, CHERRY_LOG_LEVEL_INFO, CHERRY_LOG_MODULE_ALL);
+
 	auto err = GetDeviceInfo();
 
 #ifdef CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_DFU
@@ -498,6 +516,8 @@ int UltraWideBandImpl::_Init(const Callbacks &callbacks)
 
 		mCtx = cherry_create("qm35", &UwbCoreCallback, this);
 		VerifyOrReturnValue(mCtx, -ENODEV, LOG_ERR("Failed to create Cherry context"));
+
+		cherry_set_log_level(mCtx, CHERRY_LOG_LEVEL_INFO, CHERRY_LOG_MODULE_ALL);
 
 		err = GetDeviceInfo();
 	}
