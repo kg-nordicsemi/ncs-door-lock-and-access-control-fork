@@ -80,29 +80,45 @@ constexpr int64_t kBleRssiReadIntervalMs{ 500 };
 int64_t sBleRssiLastReadMs[CONFIG_DOOR_LOCK_BLE_UWB_MAX_SESSIONS]{};
 
 /* Reads BLE RSSI for a connection via the HCI Read RSSI command.
- * Returns the RSSI in dBm, or -127 on failure (BT_HCI_LE_RSSI_NOT_AVAILABLE). */
+ * Safe to call from the system workqueue (CONFIG_BT_RECV_WORKQ_BT=1 means BT RX
+ * uses a dedicated BT workqueue, so bt_hci_cmd_send_sync() will not deadlock here).
+ * Returns the RSSI in dBm, or BT_HCI_LE_RSSI_NOT_AVAILABLE (0x7F) on failure. */
 int8_t ReadBleRssiHci(bt_conn *conn)
 {
 	uint16_t handle;
-	if (bt_hci_get_conn_handle(conn, &handle) != 0) {
-		return -127;
+	int err = bt_hci_get_conn_handle(conn, &handle);
+	if (err != 0) {
+		LOG_DBG("bt_hci_get_conn_handle failed: %d", err);
+		return BT_HCI_LE_RSSI_NOT_AVAILABLE;
 	}
 
-	net_buf *buf = bt_hci_cmd_alloc(K_MSEC(50));
+	/* Use K_FOREVER: the HCI round-trip is ~1-5 ms; on the system workqueue this is
+	 * acceptable since BT uses its own dedicated bt_work_q workqueue. */
+	net_buf *buf = bt_hci_cmd_alloc(K_FOREVER);
 	if (!buf) {
-		return -127;
+		LOG_ERR("BLE RSSI: bt_hci_cmd_alloc returned NULL");
+		return BT_HCI_LE_RSSI_NOT_AVAILABLE;
 	}
 
 	auto *cp = static_cast<bt_hci_cp_read_rssi *>(net_buf_add(buf, sizeof(bt_hci_cp_read_rssi)));
 	cp->handle = sys_cpu_to_le16(handle);
 
 	net_buf *rsp = nullptr;
-	if (bt_hci_cmd_send_sync(BT_HCI_OP_READ_RSSI, buf, &rsp) != 0 || !rsp) {
-		return -127;
+	err = bt_hci_cmd_send_sync(BT_HCI_OP_READ_RSSI, buf, &rsp);
+	if (err != 0) {
+		LOG_DBG("bt_hci_cmd_send_sync(READ_RSSI) failed: %d", err);
+		return BT_HCI_LE_RSSI_NOT_AVAILABLE;
+	}
+	if (!rsp) {
+		LOG_DBG("bt_hci_cmd_send_sync(READ_RSSI) returned null response");
+		return BT_HCI_LE_RSSI_NOT_AVAILABLE;
 	}
 
 	const auto *rp = static_cast<const bt_hci_rp_read_rssi *>(static_cast<const void *>(rsp->data));
-	const int8_t rssi = (rp->status == 0) ? rp->rssi : INT8_C(-127);
+	const int8_t rssi = (rp->status == 0) ? rp->rssi : INT8_C(BT_HCI_LE_RSSI_NOT_AVAILABLE);
+	if (rp->status != 0) {
+		LOG_DBG("READ_RSSI HCI status error: 0x%02x", rp->status);
+	}
 	net_buf_unref(rsp);
 	return rssi;
 }
@@ -242,7 +258,8 @@ void FrontBackDetection::ProcessSessions(sys_slist_t *activeSessions)
 		const uint8_t idx = bleSessions[i].sessionIdx;
 		if (nowMs - sBleRssiLastReadMs[idx] >= kBleRssiReadIntervalMs) {
 			const int8_t rssi = ReadBleRssiHci(bleSessions[i].conn);
-			if (rssi != INT8_C(-127)) {
+			if (rssi != static_cast<int8_t>(BT_HCI_LE_RSSI_NOT_AVAILABLE)) {
+				LOG_DBG("sess%u BLE RSSI read: %d dBm", idx, rssi);
 				Disambiguation::Disambiguator::Instance().AddBleRssiMeasurement(rssi, idx);
 			}
 			sBleRssiLastReadMs[idx] = nowMs;

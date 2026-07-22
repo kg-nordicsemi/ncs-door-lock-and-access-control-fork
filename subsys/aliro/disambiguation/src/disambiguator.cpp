@@ -116,6 +116,21 @@ void Disambiguator::AddPdoaMeasurement(int16_t pdoaQ411, int16_t rssiQ88, uint8_
 	aliro_disambiguation_put_pdoa_rssi_data(adjusted, static_cast<uint16_t>(rssiQ88), sessionIdx, pdoaError,
 						rssiError, CONFIG_DOOR_LOCK_ALIRO_UWB_MIN_RAN_MULTIPLIER);
 	mSessions[sessionIdx].pdoaCount++;
+
+	/* Track UWB RSL for front/back discrimination.
+	 * rsl_q8 is a signed Q8.8 value (stored as int16_t), where rsl_dBm = rssiQ88 / 256.0f.
+	 * More negative = weaker signal. When phone goes behind door, RSL drops by ~5-15 dB. */
+	if (!rssiError) {
+		constexpr float kUwbRslAlpha{ CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_UWB_RSL_ALPHA / 1000.0f };
+		const float rslDbm = static_cast<float>(rssiQ88) / 256.0f;
+		SessionState &sess = mSessions[sessionIdx];
+		if (!sess.mUwbRslValid) {
+			sess.mUwbRslEwma = rslDbm;
+			sess.mUwbRslValid = true;
+		} else {
+			sess.mUwbRslEwma += kUwbRslAlpha * (rslDbm - sess.mUwbRslEwma);
+		}
+	}
 }
 
 void Disambiguator::AddCirMeasurement(uint8_t *data, uint16_t size)
@@ -213,6 +228,8 @@ int Disambiguator::Process(Result &out, uint8_t sessionIdx)
 		static_cast<float>(CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BLE_RSSI_DROP_DB) };
 	constexpr float kBleRssiScoreCap{
 		CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BLE_RSSI_SCORE_CAP / 1000.0f };
+	constexpr float kUwbRslDropDb{
+		static_cast<float>(CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_UWB_RSL_DROP_DB) };
 
 	static_assert(kFrontThresh > kBackThresh, "FRONT threshold must be above BACK threshold (hysteresis gap)");
 	static_assert(kEwmaAlpha > 0.0f && kEwmaAlpha <= 1.0f, "EWMA alpha must be in (0, 1]");
@@ -373,6 +390,24 @@ int Disambiguator::Process(Result &out, uint8_t sessionIdx)
 		sess.mFrontScore = std::min(sess.mFrontScore, kBleRssiScoreCap);
 	}
 
+	/* UWB RSL veto: uses the UWB Received Signal Level from the ranging diagnostic.
+	 *
+	 * Unlike p_ratio (derived from radar CIR body reflections), UWB RSL measures
+	 * the signal received from the PHONE's UWB transmitter. When the phone is
+	 * behind the door, UWB signal is attenuated by ~5-15 dB.
+	 *
+	 * NOTE on sign convention: rsl_q8 is stored as an UNSIGNED Q8.8 "absolute value"
+	 * in dBm (e.g., -67 dBm → stored as 67 × 256 = 17203). Higher stored value =
+	 * larger absolute dBm = more negative actual signal = WEAKER.
+	 * Therefore when phone goes behind door: mUwbRslEwma INCREASES (e.g., 67 → 80).
+	 * Comparison direction: veto when (current - reference) >= threshold. */
+	const bool uwbRslVetoed = sess.mUwbRefSet && sess.mUwbRslValid && rawFront &&
+				  !sess.lastResult.mSideIsFront &&
+				  (sess.mUwbRslEwma - sess.mRefUwbRsl >= kUwbRslDropDb);
+	if (uwbRslVetoed) {
+		sess.mFrontScore = std::min(sess.mFrontScore, kBleRssiScoreCap);
+	}
+
 	/* 4. Hysteresis decision from score. */
 	if (sess.lastResult.mSideIsFront) {
 		out.mSideIsFront = (sess.mFrontScore >= kBackThresh);
@@ -384,13 +419,40 @@ int Disambiguator::Process(Result &out, uint8_t sessionIdx)
 
 	if (out.mSideIsFront) {
 		sess.mHasBeenFront = true;
-		/* Capture BLE RSSI reference the first time FRONT is confirmed so that
-		 * subsequent BACK→FRONT re-entries can be compared against it. */
+
+		/* BLE RSSI reference: capture once on first FRONT.
+		 * BLE RSSI is read only every 500ms so continuous tracking adds little value. */
 		if (!sess.mBleRefSet && sess.mBleRssiValid) {
 			sess.mRefBleRssi = sess.mBleRssiEwma;
 			sess.mBleRefSet = true;
 			LOG_DBG("sess%u BLE RSSI reference captured: %.1f dBm", sessionIdx,
 				static_cast<double>(sess.mRefBleRssi));
+		}
+
+		/* UWB RSL reference: continuously track in-front RSL while FRONT is confirmed.
+		 *
+		 * A fixed first-FRONT reference is unreliable: if FRONT was falsely triggered
+		 * (e.g. phone far away or behind door), the reference would be wrong for the
+		 * rest of the session, making the veto ineffective or inverting it.
+		 *
+		 * Instead we use a slow EWMA (α=0.03, τ≈33 ticks ≈ 2.4 s) so that:
+		 *  • After a few seconds of genuine FRONT, reference converges to the actual
+		 *    in-front UWB RSL.
+		 *  • Brief BACK flickers cannot corrupt the reference (tracking only happens
+		 *    when the score is confirmed FRONT, not during BACK).
+		 *  • When phone moves behind door (sustained BACK), the reference stays frozen
+		 *    at the last genuine in-front RSL, giving a stable comparison point. */
+		constexpr float kUwbRefAlpha{ 0.03f };
+		if (sess.mUwbRslValid) {
+			if (!sess.mUwbRefSet) {
+				sess.mRefUwbRsl = sess.mUwbRslEwma;
+				sess.mUwbRefSet = true;
+				LOG_DBG("sess%u UWB RSL reference init: %.1f dBm (=-%ddBm)", sessionIdx,
+					static_cast<double>(sess.mRefUwbRsl),
+					static_cast<int>(sess.mRefUwbRsl));
+			} else {
+				sess.mRefUwbRsl += kUwbRefAlpha * (sess.mUwbRslEwma - sess.mRefUwbRsl);
+			}
 		}
 	}
 
@@ -399,12 +461,23 @@ int Disambiguator::Process(Result &out, uint8_t sessionIdx)
 	const int32_t scorePermille = static_cast<int32_t>(sess.mFrontScore * 1000.0f);
 	const int32_t alphaPermille = static_cast<int32_t>(adaptiveAlpha * 1000.0f);
 	const bool reFrontClimb = rawFront && !sess.lastResult.mSideIsFront && useReFrontFactor;
+	/* Log BLE RSSI (0 if not yet received).
+	 * UWB RSL displayed as negative dBm (rsl_q8 is "absolute value", so negate for display).
+	 * e.g. uwb=-67dBm = strong (phone in front), uwb=-80dBm = weak (phone behind door).
+	 * uwb-drop shows (current - ref) in dBm: positive = phone moved away/behind door. */
 	const int32_t bleRssiInt = sess.mBleRssiValid ? static_cast<int32_t>(sess.mBleRssiEwma) : 0;
-	LOG_DBG("sess%u %s pratio=%d pdoa=%d cir=%d blk=%d dist=%ucm score=%d/1000 alpha=%d/1000 ble=%ddBm%s%s%s%s",
-		sessionIdx, out.mSideIsFront ? "FRONT" : "BACK ", pRatioU6, meanPdoaMilliDeg, results.CIR,
+	const int32_t uwbRslNeg = sess.mUwbRslValid ? -static_cast<int32_t>(sess.mUwbRslEwma) : 0;
+	/* uwbDrop > 0 = phone further/behind door vs reference (higher absolute dBm = weaker) */
+	const int32_t uwbDropDb = (sess.mUwbRefSet && sess.mUwbRslValid)
+					 ? static_cast<int32_t>(sess.mUwbRslEwma - sess.mRefUwbRsl)
+					 : 0;
+	LOG_DBG("sess%u %s pratio=%d cir=%d blk=%d dist=%ucm score=%d/1000 alpha=%d/1000 ble=%ddBm uwb=%ddBm drop=%ddB%s%s%s%s%s",
+		sessionIdx, out.mSideIsFront ? "FRONT" : "BACK ", pRatioU6, results.CIR,
 		results.noise_blocks, results.distance_cm, scorePermille, alphaPermille, bleRssiInt,
+		uwbRslNeg, uwbDropDb,
 		cappedByLowConfidence ? " [cap]" : "",
 		bleVetoed ? " [ble-veto]" : "",
+		uwbRslVetoed ? " [uwb-veto]" : "",
 		reFrontClimb ? " [re]" : "",
 		suspiciousJump ? " [jump]" : "");
 

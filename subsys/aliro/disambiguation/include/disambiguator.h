@@ -169,6 +169,23 @@ private:
 		bool mBleRssiValid{ false };
 		float mRefBleRssi{ 0.0f };
 		bool mBleRefSet{ false };
+
+		/* UWB RSL discriminator.
+		 *
+		 * The UWB Received Signal Level (rsl_q8, signed Q8.8 dBm) comes from the
+		 * ranging diagnostic report and measures the UWB signal received from the
+		 * PHONE itself — independent of body reflections detected by the radar.
+		 * When the phone moves behind the door, the UWB RSL drops by ~5-15 dB
+		 * (door attenuation at 6.5 GHz), providing a physics-based discriminator.
+		 *
+		 * mUwbRslEwma  — smoothed UWB RSL in dBm (EWMA of rsl_q8 / 256.0).
+		 * mUwbRslValid — true once at least one valid RSL sample has been received.
+		 * mRefUwbRsl   — RSL captured when FRONT was first confirmed.
+		 * mUwbRefSet   — true when mRefUwbRsl has been captured. */
+		float mUwbRslEwma{ 0.0f };
+		bool mUwbRslValid{ false };
+		float mRefUwbRsl{ 0.0f };
+		bool mUwbRefSet{ false };
 	};
 
 	std::array<SessionState, kMaxSessions> mSessions{};
