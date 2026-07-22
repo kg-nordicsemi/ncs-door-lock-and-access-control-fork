@@ -1,0 +1,28 @@
+diff --git a/project/cherry/aliro_uwb_adapter/src/aliro_uwb_session.c b/project/cherry/aliro_uwb_adapter/src/aliro_uwb_session.c
+index bc7c226..d28b7f1 100644
+--- a/project/cherry/aliro_uwb_adapter/src/aliro_uwb_session.c
++++ b/project/cherry/aliro_uwb_adapter/src/aliro_uwb_session.c
+@@ -89,11 +89,20 @@ static void aliro_ccc_cb(struct cherry_ccc_event *event, void *user_data)
+ 	if (event->type == CHERRY_CCC_EVENT_TYPE_SESSION_ERROR)
+ 		aliro_uwb_session_error(session);
+ 
+-	if (event->type == CHERRY_CCC_EVENT_TYPE_SESSION_STATUS &&
+-	    event->data.status->session_state == CHERRY_CCC_SESSION_STATE_DEINIT)
+-		qfree(session);
++	const bool is_deinit =
++		(event->type == CHERRY_CCC_EVENT_TYPE_SESSION_STATUS &&
++		 event->data.status->session_state == CHERRY_CCC_SESSION_STATE_DEINIT);
+ 
+ 	callback(aliro_event, data);
++
++	/* Free the session AFTER the callback so that 'session' remains valid
++	 * throughout the callback execution. Freeing before the callback is a
++	 * use-after-free: the heap block can be immediately reused for a new
++	 * session, causing the callback to corrupt or misinterpret the new
++	 * session's data (stale session ID mismatch, "Bad session id" error).
++	 */
++	if (is_deinit)
++		qfree(session);
+ }
+ 
+ static void aliro_uwb_session_close(struct aliro_uwb_session *session)
