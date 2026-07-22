@@ -26,37 +26,65 @@ config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_MAX_CIR
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_P_RATIO
 	int "p_ratio threshold for disambiguation"
-	default 7500 if DOOR_LOCK_ALIRO_UWB_QM35_ANTENNA_4PORT
-	default 5300 if DOOR_LOCK_ALIRO_UWB_QM35_ANTENNA_2PORT
-	default 6300
+	default 700
 	range 1 30000
 	help
-	  Minimum p_ratio for FRONT detection. The value is multiplied by 10000
-	  (e.g. set 6000 for 0.6). p_ratio is derived from radar CIR amplitude
-	  and phone RSSI. Lower values increase FRONT detection range but reduce
-	  accuracy.
+	  Minimum p_ratio for FRONT detection. The value is divided by 10000
+	  (e.g. set 700 for 0.07). p_ratio is derived from radar CIR amplitude
+	  and phone RSSI after EMA clutter cancellation (alpha=0.9, hardcoded in
+	  the library). The EMA filter suppresses static reflections, so a
+	  stationary person in front produces only micro-motion residuals
+	  (breathing, slight body sway) typically yielding p_ratio 0.04–0.45.
+	  The original default (0.63–0.75) was calibrated for moving targets and
+	  is far too high for reliable stationary detection. Set to 700 (0.07)
+	  to capture the lower end of breathing-induced residuals. Lower values
+	  increase FRONT sensitivity at the cost of potential false positives.
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_NB_BLOCKS
 	int "Max noise blocks threshold for disambiguation"
-	default 6
+	default 25
 	range 0 40
 	help
 	  Maximum number of noise blocks allowed for a FRONT decision.
-	  Higher values are more permissive (easier FRONT detection).
+	  The library examines 34 overlapping 7-sweep windows in the 40-sweep
+	  measurement window. A block counts as "noise" when its mean CIR
+	  magnitude is below NOISE_THRESHOLD (normal angle) or
+	  SHADOW_NOISE_THRESHOLD (PDOA >150°). For a stationary person,
+	  EMA clutter cancellation (alpha=0.9) suppresses the static reflection,
+	  leaving residuals only in sweeps where micro-motion occurred. With
+	  1–2 active sweeps out of 40 the noise_blocks count is typically 27–33.
+	  The original default of 6 was calibrated for moving targets and
+	  completely blocks stationary FRONT detection. Set to 25 to allow the
+	  stationary case through while still rejecting a truly empty environment
+	  (all 34 blocks noise, no person present at that distance).
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_NOISE_THRESHOLD
 	int "Noise block amplitude threshold"
-	default 15
+	default 5
 	range 1 100
 	help
-	  CIR amplitude below which a block is classified as noise (normal angle).
+	  CIR magnitude mean below which a 7-sweep block is classified as noise
+	  (for PDOA within ±150° of normal). After EMA clutter cancellation the
+	  residuals from a stationary person (breathing, micro-sway) produce a
+	  per-block mean of roughly 8–10 CIR units. The original default of 15
+	  classified these residuals as noise, forcing noise_blocks high and
+	  blocking FRONT detection. Lowering to 5 allows blocks with small but
+	  real residuals to pass as non-noise, reducing noise_blocks for a
+	  stationary person in front while keeping truly empty blocks (mean≈0)
+	  as noise.
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_SHADOW_THRESHOLD
 	int "Shadow noise block amplitude threshold"
-	default 8
+	default 3
 	range 1 100
 	help
-	  CIR amplitude below which a block is classified as noise in the shadow region (back side).
+	  CIR magnitude mean below which a 7-sweep block is classified as noise
+	  in the shadow region (PDOA >150°, i.e. phone behind the door). This
+	  applies a tighter noise criterion for signals arriving from behind,
+	  where legitimate FRONT residuals are absent. Lowering from 8 to 3
+	  ensures that tiny spurious reflections from behind do not mistakenly
+	  pull noise_blocks below the NB_BLOCKS threshold and produce a FRONT
+	  decision when the phone is behind the door.
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BLIND_DISTANCE_CM
 	int "Blind distance (cm) below which disambiguation is disabled"
@@ -74,24 +102,155 @@ config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_SECURE_BUBBLE_CM
 	  Door open is confirmed only when the user is within this distance.
 	  Acts as a final gate after FRONT is detected.
 
-config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_FRONT_TO_BACK_CONFIRM
-	int "Consecutive BACK ticks required for FRONT to BACK transition"
-	default 8
-	range 1 20
+config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_EWMA_ALPHA
+	int "EWMA smoothing factor (permille, 1-1000)"
+	default 150
+	range 1 1000
 	help
-	  Number of consecutive BACK results required to switch the side
-	  decision from FRONT to BACK. Acts as a low-pass filter to prevent
-	  spurious BACK flashes (e.g. caused by CIR saturation or transient
-	  noise). Higher values make the FRONT state more stable.
+	  Exponential weighted moving average (EWMA) alpha multiplied by 1000.
+	  For example, 150 means alpha=0.15: each new measurement moves the
+	  soft confidence score by at most 15 % of the remaining distance to
+	  the target. Lower values = slower but more stable transitions;
+	  higher values = faster but noisier response.
 
-config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BACK_TO_FRONT_CONFIRM
-	int "Consecutive FRONT ticks required for BACK to FRONT transition"
-	default 6
-	range 1 20
+config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_FRONT_SCORE_THRESHOLD
+	int "EWMA score threshold to switch BACK→FRONT (permille, 1-999)"
+	default 650
+	range 1 999
 	help
-	  Number of consecutive FRONT results required to switch the side
-	  decision from BACK to FRONT. Acts as a low-pass filter to prevent
-	  spurious FRONT detections. Lower values make FRONT detection faster.
+	  The soft confidence score (0-1000 permille) must exceed this value
+	  before the side decision switches from BACK to FRONT.
+	  Must be greater than BACK_SCORE_THRESHOLD to create a hysteresis gap.
+
+config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BACK_SCORE_THRESHOLD
+	int "EWMA score threshold to switch FRONT→BACK (permille, 1-999)"
+	default 350
+	range 1 999
+	help
+	  The soft confidence score (0-1000 permille) must drop below this
+	  value before the side decision switches from FRONT to BACK.
+	  Must be less than FRONT_SCORE_THRESHOLD to create a hysteresis gap.
+
+config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_FRONT_CLIMB_FACTOR
+	int "BACK-to-FRONT EWMA climb factor for first approach (permille, 1-1000)"
+	default 300
+	range 1 1000
+	help
+	  Multiplier applied to the EWMA alpha when climbing from BACK to FRONT
+	  for the FIRST TIME in a session (mHasBeenFront=false). This allows fast
+	  initial FRONT detection when the phone genuinely approaches the door.
+	  Set to 1000 (=1.0) for symmetric behaviour.
+	  Once FRONT has been confirmed at least once, re-entry from BACK uses
+	  RE_FRONT_CLIMB_FACTOR instead (see below).
+	  Example: at 300 the score climbs at 30% of base alpha, reaching FRONT
+	  threshold from zero in approximately 2 seconds for a stationary phone.
+
+config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_RE_FRONT_CLIMB_FACTOR
+	int "BACK-to-FRONT EWMA re-entry factor after confirmed BACK (permille, 1-1000)"
+	default 100
+	range 1 1000
+	help
+	  Multiplier applied to the EWMA alpha when re-entering FRONT from BACK
+	  after the session has already seen at least one confirmed FRONT
+	  (mHasBeenFront=true). This guards against body-motion false re-detections:
+	  after the phone is confirmed BACK, body movement in front of the radar
+	  produces p_ratio values indistinguishable from a genuine phone presence.
+	  By using a much lower factor for re-entry, the false signal must persist
+	  far longer before crossing the FRONT threshold. At 100 (=0.1), re-entry
+	  from BACK takes approximately 7 seconds of sustained rawFront=true signal,
+	  while typical body-motion episodes last only 2–4 seconds — preventing the
+	  false trigger entirely in most real-world scenarios.
+	  Genuine re-approach (phone moved back to front) also takes ~7 s, which is
+	  an acceptable security/UX trade-off for a door lock application.
+	  Set equal to FRONT_CLIMB_FACTOR to disable the distinction.
+
+config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_JUMP_RATIO_THRESHOLD
+	int "Suspicious p_ratio jump ratio threshold (percent, >100)"
+	default 200
+	range 110 1000
+	help
+	  Minimum ratio of new/previous p_ratio (in percent) to classify as a suspicious
+	  body-motion spike. Body motion causes p_ratio to jump >2x in a single 86ms tick
+	  (e.g. 86k → 224k = 260%). Genuine phone approaches ramp slowly (<1.5x/tick).
+	  Default 200 (=2.0x) detects the most obvious spikes. Lower values increase
+	  sensitivity but may cause false jump detections during legitimate fast approach.
+	  The jump is only flagged when the current state is BACK (rawFront=true after
+	  confirmed BACK) and the previous p_ratio was already above the detection threshold.
+
+config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_JUMP_COOLDOWN_TICKS
+	int "Number of ticks to slow BACK→FRONT climb after a suspicious jump"
+	default 20
+	range 1 100
+	help
+	  After a suspicious p_ratio jump is detected, the BACK→FRONT climb uses
+	  RE_FRONT_CLIMB_FACTOR for this many ticks regardless of mHasBeenFront.
+	  At ~14 ticks/second this default of 20 ticks = ~1.4 seconds of suppression.
+	  During suppression the score cannot grow faster than RE_FRONT_CLIMB_FACTOR allows,
+	  which at the default of 100 permille requires ~7 s total to reach FRONT threshold.
+	  Set higher to extend the suppression window after a body-motion spike.
+
+config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BACK_SINK_FACTOR
+	int "FRONT-to-BACK EWMA sink factor (permille, 1-1000)"
+	default 500
+	range 1 1000
+	help
+	  Base multiplier for EWMA alpha when the score is sinking from a FRONT
+	  state (rawFront=false while current state is FRONT). The actual factor
+	  applied is adaptive: it scales with pRatioConfidence so that a
+	  clearly-BACK signal (p_ratio well below threshold) sinks fast, while a
+	  borderline signal (barely below threshold) sinks slowly:
+	    factor = BACK_SINK_FACTOR/1000 + (1 - BACK_SINK_FACTOR/1000) × pRatioConf
+	  At pRatioConfidence=1.0 (unambiguously BACK): factor=1.0 (fastest sink).
+	  At pRatioConfidence=0.0 (right at boundary): factor=BACK_SINK_FACTOR/1000.
+	  Set to 1000 (=1.0) for uniform full-speed sink (no noise protection).
+	  Lower values increase protection against borderline false-BACK flickers.
+	  Example: with 500 and a brief noise spike barely crossing the threshold
+	  (pRatioConf≈0): factor=0.5 → score sinks at half speed, keeping FRONT.
+	  The same spike clearly below threshold (pRatioConf=1.0): factor=1.0 →
+	  score sinks at full speed, confirming genuine BACK quickly.
+
+config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_FRONT_CONFIDENCE_REQUIRED
+	int "Minimum p_ratio confidence required to lift score cap (permille, 0-1000)"
+	default 300
+	range 0 1000
+	help
+	  Minimum pRatioConfidence for a rawFront=true tick to push the score above
+	  LOW_CONFIDENCE_SCORE_CAP. pRatioConfidence is the normalised distance of the
+	  measured p_ratio from the configured threshold: with the new threshold of
+	  0.07, a value of 300 (=0.30) means p_ratio must exceed 0.07 × 1.30 = 0.091.
+	  Stationary breathing residuals typically produce p_ratio 0.1–0.45, which
+	  clears this bar easily. Borderline library noise (p_ratio just above 0.07)
+	  would not clear 0.091 and remains capped at LOW_CONFIDENCE_SCORE_CAP,
+	  preventing noise spikes from accumulating into a FRONT decision.
+	  Raising from 150 to 300 tightens the ceiling relative to the new
+	  (much lower) threshold, preserving its noise-rejection function.
+	  Set to 0 to disable the confidence ceiling entirely.
+
+config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_LOW_CONFIDENCE_SCORE_CAP
+	int "Score ceiling applied when p_ratio confidence is too low (permille, 1-999)"
+	default 500
+	range 1 999
+	help
+	  Maximum EWMA score allowed when pRatioConfidence is below
+	  FRONT_CONFIDENCE_REQUIRED. Must be strictly below FRONT_SCORE_THRESHOLD
+	  (default 650) so that borderline rawFront=true ticks can never alone cross
+	  into FRONT territory. The score may still pre-charge up to this ceiling,
+	  enabling fast FRONT confirmation the moment a high-confidence tick arrives.
+
+config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_CIR_DAMP_STRENGTH
+	int "CIR saturation dampening strength (permille, 0-1000)"
+	default 700
+	range 0 1000
+	help
+	  Controls how much a high radar CIR value reduces the EWMA step size.
+	  When the CIR is at its maximum threshold the EWMA alpha is multiplied
+	  by (1 - CIR_DAMP_STRENGTH/1000). For example, 700 means alpha drops
+	  to 30 % of its normal value when CIR is fully saturated, making each
+	  saturated tick move the confidence score 3x less than a clean tick.
+	  Set to 0 to disable CIR dampening entirely.
+	  NOTE: PDOA is intentionally NOT used as a discriminator because it is
+	  reliable only within the ±70° cone in front of the radar antenna and
+	  becomes random when the phone is behind the door.
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_PDOA_OFFSET_DEG
 	int "PDOA calibration offset (degrees)"
@@ -109,6 +268,44 @@ config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_DISTANCE_OFFSET_CM
 	  Distance offset in cm subtracted from raw UWB range measurements
 	  before feeding the disambiguation algorithm. Compensates for
 	  systematic ranging bias.
+
+config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BLE_RSSI_DROP_DB
+	int "BLE RSSI drop threshold for phone-behind-door veto (dB, 1-40)"
+	default 12
+	range 1 40
+	help
+	  When the phone is behind the door, BLE signal is attenuated by a wooden
+	  or metal door (~10-25 dB extra loss). If the smoothed BLE RSSI drops
+	  more than this many dB below the reference level captured when FRONT was
+	  last confirmed, the disambiguator caps the score to BLE_RSSI_SCORE_CAP,
+	  preventing body-motion false re-FRONT detections.
+	  Default 12 dB gives headroom for environmental variation while detecting
+	  typical door attenuation (15-25 dB for solid wooden doors).
+	  Increase toward 20 if you get false vetoes; decrease toward 8 for thinner
+	  or hollow doors.
+
+config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BLE_RSSI_ALPHA
+	int "BLE RSSI EWMA smoothing factor (permille, 1-1000)"
+	default 200
+	range 1 1000
+	help
+	  EWMA coefficient for smoothing BLE RSSI samples before comparison.
+	  Higher values track rapid RSSI changes faster but are noisier.
+	  Lower values produce a stable average but react more slowly.
+	  At 200 (=0.2) the EWMA reaches 95% of a step change in ~14 samples
+	  (~7 seconds at 2 samples/second). BLE RSSI is read every 500ms.
+
+config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BLE_RSSI_SCORE_CAP
+	int "Maximum EWMA score when BLE RSSI veto is active (permille, 1-999)"
+	default 300
+	range 1 999
+	help
+	  When the BLE RSSI drop exceeds BLE_RSSI_DROP_DB the score is capped
+	  at this value. Must be strictly below FRONT_SCORE_THRESHOLD (default 650)
+	  so that body-motion radar spikes cannot alone cross into FRONT territory
+	  when the phone is confirmed to be behind the door.
+	  At 300 (=0.3) a strong and sustained body-motion spike still needs the
+	  BLE RSSI to recover before FRONT can be reported.
 
 module = DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION
 module-str = "UWB disambiguation"

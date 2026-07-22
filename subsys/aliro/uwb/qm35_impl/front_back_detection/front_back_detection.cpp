@@ -19,8 +19,13 @@
 #include <doorlock/utils/mutex_guard.h>
 #include <doorlock/utils/utils.h>
 
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/hci_types.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/net_buf.h>
+#include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/slist.h>
 
 #include <errno.h>
@@ -65,6 +70,41 @@ void LogFrontBackDetectionResult(uint8_t sessionIdx, size_t activeRangingSession
 		result.mDistanceCm, pRatioU6, result.mCir, result.mNoiseBlocks, pdoa.mSign, pdoa.mInteger,
 		pdoa.mFraction);
 #endif
+}
+
+/* Minimum interval between BLE RSSI reads per session (ms).
+ * HCI READ_RSSI is a blocking round-trip; ~2 Hz is more than sufficient. */
+constexpr int64_t kBleRssiReadIntervalMs{ 500 };
+
+/* Per-session timestamp of the last BLE RSSI HCI read. */
+int64_t sBleRssiLastReadMs[CONFIG_DOOR_LOCK_BLE_UWB_MAX_SESSIONS]{};
+
+/* Reads BLE RSSI for a connection via the HCI Read RSSI command.
+ * Returns the RSSI in dBm, or -127 on failure (BT_HCI_LE_RSSI_NOT_AVAILABLE). */
+int8_t ReadBleRssiHci(bt_conn *conn)
+{
+	uint16_t handle;
+	if (bt_hci_get_conn_handle(conn, &handle) != 0) {
+		return -127;
+	}
+
+	net_buf *buf = bt_hci_cmd_alloc(K_MSEC(50));
+	if (!buf) {
+		return -127;
+	}
+
+	auto *cp = static_cast<bt_hci_cp_read_rssi *>(net_buf_add(buf, sizeof(bt_hci_cp_read_rssi)));
+	cp->handle = sys_cpu_to_le16(handle);
+
+	net_buf *rsp = nullptr;
+	if (bt_hci_cmd_send_sync(BT_HCI_OP_READ_RSSI, buf, &rsp) != 0 || !rsp) {
+		return -127;
+	}
+
+	const auto *rp = static_cast<const bt_hci_rp_read_rssi *>(static_cast<const void *>(rsp->data));
+	const int8_t rssi = (rp->status == 0) ? rp->rssi : INT8_C(-127);
+	net_buf_unref(rsp);
+	return rssi;
 }
 
 } // namespace
@@ -152,6 +192,16 @@ void FrontBackDetection::ProcessSessions(sys_slist_t *activeSessions)
 
 	Disambiguation::Result result{};
 
+	/* BLE sessions whose RSSI we want to read after releasing the mutex.
+	 * HCI READ_RSSI is a synchronous blocking call — must NOT be called under
+	 * the sessions mutex (risk of deadlock with BT stack callbacks). */
+	struct BleSessionEntry {
+		bt_conn *conn;
+		uint8_t sessionIdx;
+	};
+	BleSessionEntry bleSessions[CONFIG_DOOR_LOCK_BLE_UWB_MAX_SESSIONS]{};
+	uint8_t bleSessionCount{ 0 };
+
 	SessionContext *sessionCtx{};
 	{
 		DoorLock::Utils::MutexGuard lock{ *mSessionsMutex };
@@ -172,7 +222,32 @@ void FrontBackDetection::ProcessSessions(sys_slist_t *activeSessions)
 				LogFrontBackDetectionResult(sessionCtx->mDisambiguationSessionIdx,
 							    activeRangingSessions, result);
 			}
+
+			/* Collect BLE sessions for post-mutex RSSI reading. */
+			if (sessionCtx->mSessionContextData.IsBle() &&
+			    bleSessionCount < ARRAY_SIZE(bleSessions)) {
+				bt_conn *conn = sessionCtx->mSessionContextData.GetBtConn();
+				/* bt_conn_ref keeps the connection alive until we release it below. */
+				bt_conn_ref(conn);
+				bleSessions[bleSessionCount++] = { conn,
+								   sessionCtx->mDisambiguationSessionIdx };
+			}
 		}
+	} /* sessions mutex released */
+
+	/* Phase 2: read BLE RSSI outside the mutex and feed samples to the disambiguator.
+	 * Throttled to kBleRssiReadIntervalMs to avoid flooding HCI. */
+	const int64_t nowMs = k_uptime_get();
+	for (uint8_t i = 0; i < bleSessionCount; i++) {
+		const uint8_t idx = bleSessions[i].sessionIdx;
+		if (nowMs - sBleRssiLastReadMs[idx] >= kBleRssiReadIntervalMs) {
+			const int8_t rssi = ReadBleRssiHci(bleSessions[i].conn);
+			if (rssi != INT8_C(-127)) {
+				Disambiguation::Disambiguator::Instance().AddBleRssiMeasurement(rssi, idx);
+			}
+			sBleRssiLastReadMs[idx] = nowMs;
+		}
+		bt_conn_unref(bleSessions[i].conn);
 	}
 
 	ScheduleProcessing();
@@ -299,8 +374,13 @@ void FrontBackDetection::HandleDiagnosticReport(const SessionContext &sessionCtx
 	bool rssiError = true;
 
 	if (frame.aoas && frame.n_aoa > 0) {
-		pdoa = frame.aoas[0].pdoa;
-		pdoaError = false;
+		const auto &aoaMeas = frame.aoas[0];
+		if (aoaMeas.fom > 0) {
+			pdoa = aoaMeas.pdoa;
+			pdoaError = false;
+		} else {
+			LOG_ERR("PDOA fom=0 (invalid), skipping measurement");
+		}
 	}
 
 	if (frame.seg_metrics && frame.n_seg_metrics > 0) {
