@@ -161,7 +161,6 @@ int display_init(display_ctx_t *ctx)
 
 	// create logo at the very top
 	LV_IMAGE_DECLARE(nordic_logo);
-	LV_IMAGE_DECLARE(user_not_detected);
 	ctx->nordic_logo = lv_image_create(lv_screen_active());
 	lv_image_set_src(ctx->nordic_logo, &nordic_logo);
 	lv_obj_align(ctx->nordic_logo, LV_ALIGN_TOP_MID, 0, 10);
@@ -181,7 +180,9 @@ int display_init(display_ctx_t *ctx)
 	lv_obj_set_width(ctx->status_label, lv_pct(100));
 	lv_obj_align_to(ctx->status_label, ctx->nordic_logo, LV_ALIGN_OUT_BOTTOM_MID, 0, 8);
 
+#ifdef CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
 	// create disambiguation icon (user_detected / user_not_detected) between CLOSED/OPEN and transport mode
+	LV_IMAGE_DECLARE(user_not_detected);
 	ctx->disambiguation_icon = lv_image_create(lv_screen_active());
 	if (ctx->disambiguation_icon == NULL) {
 		LOG_ERR("Failed to create disambiguation icon");
@@ -194,6 +195,7 @@ int display_init(display_ctx_t *ctx)
 	lv_obj_align_to(ctx->disambiguation_icon, ctx->status_label, LV_ALIGN_OUT_BOTTOM_MID, 0, 4);
 	lv_obj_add_flag(ctx->disambiguation_icon, LV_OBJ_FLAG_HIDDEN);
 	lv_obj_move_foreground(ctx->disambiguation_icon);
+#endif
 
 	// create howto_close label right below status/disambiguation
 	ctx->howto_close_label = lv_label_create(lv_screen_active());
@@ -255,7 +257,7 @@ int display_init(display_ctx_t *ctx)
 		return -ENOMEM;
 	}
 
-	// threshold label permanently hidden (removed from UI)
+	// threshold label permanently hidden
 	lv_obj_add_flag(ctx->dist_limit_label, LV_OBJ_FLAG_HIDDEN);
 	lv_label_set_text(ctx->dist_limit_label, "");
 
@@ -361,14 +363,18 @@ static void display_realign_upper_labels(display_ctx_t *ctx)
 	constexpr int32_t kSmallGap = 4;
 	constexpr int32_t kModeGap = 8;
 
-	/* Order: OPEN/CLOSED → icon (when visible) → BLE/UWB mode */
 	lv_obj_t *anchor;
+#ifdef CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
+	/* Order: OPEN/CLOSED → icon (when visible) → BLE/UWB mode */
 	if (!atomic_get(&is_nfc) && atomic_get(&disambiguation_visible)) {
 		lv_obj_align_to(ctx->disambiguation_icon, ctx->status_label, LV_ALIGN_OUT_BOTTOM_MID, 0, kSmallGap);
 		anchor = ctx->disambiguation_icon;
 	} else {
 		anchor = ctx->status_label;
 	}
+#else
+	anchor = ctx->status_label;
+#endif
 
 	lv_obj_align_to(ctx->op_mode_label, anchor, LV_ALIGN_OUT_BOTTOM_MID, 0, kModeGap);
 
@@ -401,6 +407,7 @@ static void display_realign_bottom_labels(display_ctx_t *ctx)
 
 static void display_update_disambiguation_side(display_ctx_t *ctx)
 {
+#ifdef CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
 	LV_IMAGE_DECLARE(user_detected);
 	LV_IMAGE_DECLARE(user_not_detected);
 
@@ -426,14 +433,17 @@ static void display_update_disambiguation_side(display_ctx_t *ctx)
 	}
 
 	display_realign_upper_labels(ctx);
+#endif
 }
 
 static void display_apply_clear_disambiguation_side(display_ctx_t *ctx)
 {
+#ifdef CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
 	atomic_set(&disambiguation_visible, false);
 	lv_obj_add_flag(ctx->disambiguation_icon, LV_OBJ_FLAG_HIDDEN);
 	lv_obj_remove_flag(ctx->dist_label, LV_OBJ_FLAG_HIDDEN);
 	display_realign_upper_labels(ctx);
+#endif
 }
 
 int display_update(display_ctx_t *ctx, dist_data_t val)
@@ -570,25 +580,37 @@ void display_post_op_mode_change(bool isNfc)
 
 void display_post_disambiguation_side(bool isFront)
 {
+#ifndef CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
+	return;
+#else
 	bool changed = (atomic_set(&disambiguation_is_front, isFront) != (atomic_val_t)isFront) ||
 		       !atomic_get(&disambiguation_visible);
 	atomic_set(&disambiguation_visible, true);
 	if (changed) {
 		k_event_post(&display_event, BIT(DISPLAY_UPDATE_DISAMBIGUATION));
 	}
+#endif
 }
 
 void display_refresh_disambiguation_side(bool isFront)
 {
+#ifndef CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
+	return;
+#else
 	atomic_set(&disambiguation_is_front, isFront);
 	atomic_set(&disambiguation_visible, true);
 	k_event_post(&display_event, BIT(DISPLAY_UPDATE_DISAMBIGUATION));
+#endif
 }
 
 void display_clear_disambiguation_side()
 {
+#ifndef CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
+	return;
+#else
 	atomic_set(&disambiguation_visible, false);
 	k_event_post(&display_event, BIT(DISPLAY_UPDATE_DISAMBIGUATION));
+#endif
 }
 
 void display_sync_lock_state(bool isOpen)
