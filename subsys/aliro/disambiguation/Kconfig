@@ -26,7 +26,7 @@ config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_MAX_CIR
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_P_RATIO
 	int "p_ratio threshold for disambiguation"
-	default 700
+	default 1500
 	range 1 30000
 	help
 	  Minimum p_ratio for FRONT detection. The value is divided by 10000
@@ -42,7 +42,7 @@ config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_P_RATIO
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_NB_BLOCKS
 	int "Max noise blocks threshold for disambiguation"
-	default 25
+	default 12
 	range 0 40
 	help
 	  Maximum number of noise blocks allowed for a FRONT decision.
@@ -75,7 +75,7 @@ config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_NOISE_THRESHOLD
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_SHADOW_THRESHOLD
 	int "Shadow noise block amplitude threshold"
-	default 3
+	default 1
 	range 1 100
 	help
 	  CIR magnitude mean below which a 7-sweep block is classified as noise
@@ -271,7 +271,7 @@ config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_DISTANCE_OFFSET_CM
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BLE_RSSI_DROP_DB
 	int "BLE RSSI drop threshold for phone-behind-door veto (dB, 1-40)"
-	default 12
+	default 5
 	range 1 40
 	help
 	  When the phone is behind the door, BLE signal is attenuated by a wooden
@@ -309,7 +309,7 @@ config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BLE_RSSI_SCORE_CAP
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_UWB_RSL_DROP_DB
 	int "UWB RSL drop threshold for phone-behind-door veto (dB, 1-30)"
-	default 8
+	default 5
 	range 1 30
 	help
 	  UWB signals are attenuated by doors at ~5-15 dB (less than BLE's 15-25 dB).
