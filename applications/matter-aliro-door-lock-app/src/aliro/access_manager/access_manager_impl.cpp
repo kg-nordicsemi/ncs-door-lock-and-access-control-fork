@@ -586,14 +586,9 @@ void AccessManagerImpl::_HandleRangingSessionStateChanged(SessionContext session
 	case RangingSessionState::RangingSuspended:
 		LOG_INF("Ranging state changed to Ranging Suspended (session: %p)", sessionContext.GetRaw());
 
-		// Always force CLOSED on suspend: update session state without triggering the internal
-		// callback (updateReaderState=false), then call LockAction explicitly so the lock closes
-		// even if another session's mOpenAllowed is still true.
-		SetOpenAllowed(sessionContext, false, false);
-		{
-			auto *ctx = FindRangingSession(sessionContext);
-			LockAction(false, ctx ? ctx->mAccessCredentialPublicKey : CryptoTypes::PublicKey{});
-		}
+		// Suspend is a temporary ranging pause, not a session termination. Avoid changing the
+		// physical lock state here because the reader status update can immediately trigger resume.
+		SetOpenAllowed(sessionContext, false, !IsOpenAllowed());
 #if defined(CONFIG_DOOR_LOCK_DISPLAY) && defined(CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION)
 		/* Suspend = user not detected; keep disambiguation icon visible but show "not detected". */
 		display_refresh_disambiguation_side(false);
