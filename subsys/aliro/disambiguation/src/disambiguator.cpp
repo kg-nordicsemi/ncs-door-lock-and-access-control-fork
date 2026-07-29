@@ -145,26 +145,6 @@ void Disambiguator::AddCirMeasurement(uint8_t *data, uint16_t size)
 	mCirCount++;
 }
 
-void Disambiguator::AddBleRssiMeasurement(int8_t rssiDbm, uint8_t sessionIdx)
-{
-	VerifyOrReturn(mInitialized);
-	VerifyOrReturn(sessionIdx < kMaxSessions);
-
-	DoorLock::Utils::MutexGuard lock{ mMutex };
-
-	SessionState &sess = mSessions[sessionIdx];
-	constexpr float kAlpha{ CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BLE_RSSI_ALPHA / 1000.0f };
-	if (!sess.mBleRssiValid) {
-		sess.mBleRssiEwma = static_cast<float>(rssiDbm);
-		sess.mBleRssiValid = true;
-	} else {
-		sess.mBleRssiEwma += kAlpha * (static_cast<float>(rssiDbm) - sess.mBleRssiEwma);
-	}
-	LOG_DBG("sess%u BLE RSSI: %d dBm → EWMA=%.1f dBm ref=%.1f dBm%s", sessionIdx, rssiDbm,
-		static_cast<double>(sess.mBleRssiEwma), static_cast<double>(sess.mRefBleRssi),
-		sess.mBleRefSet ? " [ref-set]" : "");
-}
-
 int Disambiguator::Process(Result &out, uint8_t sessionIdx)
 {
 	VerifyOrReturnValue(mInitialized, -EBUSY);
@@ -208,41 +188,31 @@ int Disambiguator::Process(Result &out, uint8_t sessionIdx)
 	constexpr float kEwmaAlpha{ CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_EWMA_ALPHA / 1000.0f };
 	constexpr float kFrontThresh{ CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_FRONT_SCORE_THRESHOLD / 1000.0f };
 	constexpr float kBackThresh{ CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BACK_SCORE_THRESHOLD / 1000.0f };
-	constexpr float kCirDampStrength{
-		CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_CIR_DAMP_STRENGTH / 1000.0f };
-	constexpr float kFrontClimbFactor{
-		CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_FRONT_CLIMB_FACTOR / 1000.0f };
-	constexpr float kReFrontClimbFactor{
-		CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_RE_FRONT_CLIMB_FACTOR / 1000.0f };
-	constexpr float kBackSinkFactor{
-		CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BACK_SINK_FACTOR / 1000.0f };
-	constexpr float kJumpRatioThreshold{
-		CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_JUMP_RATIO_THRESHOLD / 100.0f };
-	constexpr uint8_t kJumpCooldownTicks{
-		CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_JUMP_COOLDOWN_TICKS };
-	constexpr float kFrontConfidenceRequired{
-		CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_FRONT_CONFIDENCE_REQUIRED / 1000.0f };
-	constexpr float kLowConfidenceScoreCap{
-		CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_LOW_CONFIDENCE_SCORE_CAP / 1000.0f };
-	constexpr float kBleRssiDropDb{
-		static_cast<float>(CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BLE_RSSI_DROP_DB) };
-	constexpr float kBleRssiScoreCap{
-		CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BLE_RSSI_SCORE_CAP / 1000.0f };
-	constexpr float kUwbRslDropDb{
-		static_cast<float>(CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_UWB_RSL_DROP_DB) };
+	constexpr float kCirDampStrength{ CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_CIR_DAMP_STRENGTH / 1000.0f };
+	constexpr float kFrontClimbFactor{ CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_FRONT_CLIMB_FACTOR / 1000.0f };
+	constexpr float kReFrontClimbFactor{ CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_RE_FRONT_CLIMB_FACTOR /
+					     1000.0f };
+	constexpr float kBackSinkFactor{ CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BACK_SINK_FACTOR / 1000.0f };
+	constexpr float kJumpRatioThreshold{ CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_JUMP_RATIO_THRESHOLD / 100.0f };
+	constexpr uint8_t kJumpCooldownTicks{ CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_JUMP_COOLDOWN_TICKS };
+	constexpr float kFrontConfidenceRequired{ CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_FRONT_CONFIDENCE_REQUIRED /
+						  1000.0f };
+	constexpr float kLowConfidenceScoreCap{ CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_LOW_CONFIDENCE_SCORE_CAP /
+						1000.0f };
+	constexpr float kUwbRslDropDb{ static_cast<float>(CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_UWB_RSL_DROP_DB) };
+	constexpr float kUwbRslMaxFrontDb{ static_cast<float>(
+		CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_UWB_RSL_MAX_FRONT_DB) };
+	constexpr float kUwbRslProtectFactor{ CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_UWB_RSL_PROTECT_FACTOR /
+					      1000.0f };
 
 	static_assert(kFrontThresh > kBackThresh, "FRONT threshold must be above BACK threshold (hysteresis gap)");
 	static_assert(kEwmaAlpha > 0.0f && kEwmaAlpha <= 1.0f, "EWMA alpha must be in (0, 1]");
-	static_assert(kCirDampStrength >= 0.0f && kCirDampStrength <= 1.0f,
-		      "CIR damp strength must be in [0, 1]");
-	static_assert(kFrontClimbFactor > 0.0f && kFrontClimbFactor <= 1.0f,
-		      "FRONT climb factor must be in (0, 1]");
+	static_assert(kCirDampStrength >= 0.0f && kCirDampStrength <= 1.0f, "CIR damp strength must be in [0, 1]");
+	static_assert(kFrontClimbFactor > 0.0f && kFrontClimbFactor <= 1.0f, "FRONT climb factor must be in (0, 1]");
 	static_assert(kReFrontClimbFactor > 0.0f && kReFrontClimbFactor <= 1.0f,
 		      "RE_FRONT climb factor must be in (0, 1]");
-	static_assert(kBackSinkFactor > 0.0f && kBackSinkFactor <= 1.0f,
-		      "BACK sink factor must be in (0, 1]");
-	static_assert(kJumpRatioThreshold > 1.0f,
-		      "Jump ratio threshold must be > 1.0 (ratio of new/old p_ratio)");
+	static_assert(kBackSinkFactor > 0.0f && kBackSinkFactor <= 1.0f, "BACK sink factor must be in (0, 1]");
+	static_assert(kJumpRatioThreshold > 1.0f, "Jump ratio threshold must be > 1.0 (ratio of new/old p_ratio)");
 	static_assert(kLowConfidenceScoreCap < kFrontThresh,
 		      "LOW_CONFIDENCE_SCORE_CAP must be strictly below FRONT_SCORE_THRESHOLD");
 
@@ -262,20 +232,16 @@ int Disambiguator::Process(Result &out, uint8_t sessionIdx)
 	 *    EWMA step, keeping the score frozen rather than falsely reinforcing it. */
 	const float pRatioThreshold = mDisambiguationParams.p_ratio_threshold;
 	const float pRatioNorm = (pRatioThreshold > 0.0f) ? pRatioThreshold : 0.1f;
-	const float pRatioConfidence = (results.p_ratio == 0.0f)
-					       ? 0.0f
-					       : std::min(std::fabs(results.p_ratio - pRatioThreshold) /
-								  pRatioNorm,
-							  1.0f);
+	const float pRatioConfidence =
+		(results.p_ratio == 0.0f) ? 0.0f :
+					    std::min(std::fabs(results.p_ratio - pRatioThreshold) / pRatioNorm, 1.0f);
 
 	/* 2. CIR dampening: high CIR → radar saturation / multipath → p_ratio less reliable.
 	 *    cirFraction is 0 at CIR=0 and 1 at CIR=max_cir_threshold.
 	 *    cirDampFactor drops from 1.0 (reliable) towards (1 - kCirDampStrength) (saturated),
 	 *    so alpha shrinks and the score moves less for each saturated tick. */
 	const float cirMax = static_cast<float>(mDisambiguationParams.max_cir_threshold);
-	const float cirFraction = (cirMax > 0.0f)
-					  ? std::min(static_cast<float>(results.CIR) / cirMax, 1.0f)
-					  : 0.0f;
+	const float cirFraction = (cirMax > 0.0f) ? std::min(static_cast<float>(results.CIR) / cirMax, 1.0f) : 0.0f;
 	const float cirDampFactor = 1.0f - kCirDampStrength * cirFraction;
 
 	/* 3. Adaptive EWMA update.
@@ -308,8 +274,7 @@ int Disambiguator::Process(Result &out, uint8_t sessionIdx)
 	 *
 	 *    p_ratio_confidence_factor scales between 0.5 and 1.0; measurements near the
 	 *    decision boundary move the score half as much as highly confident ones. */
-	const float adaptiveBackSinkFactor =
-		kBackSinkFactor + (1.0f - kBackSinkFactor) * pRatioConfidence;
+	const float adaptiveBackSinkFactor = kBackSinkFactor + (1.0f - kBackSinkFactor) * pRatioConfidence;
 
 	/* Suspicious p_ratio jump detection (body-motion spike guard).
 	 *
@@ -324,88 +289,92 @@ int Disambiguator::Process(Result &out, uint8_t sessionIdx)
 	 *   - both values must be above threshold (previous was a genuine detection)
 	 *   - current state is BACK (only guard re-entry, not FRONT maintenance) */
 	const float prevPRatio = sess.mPrevPRatio;
-	const bool suspiciousJump =
-		rawFront && !sess.lastResult.mSideIsFront && (prevPRatio > pRatioThreshold) &&
-		(results.p_ratio > kJumpRatioThreshold * prevPRatio);
+	const bool suspiciousJump = rawFront && !sess.lastResult.mSideIsFront && (prevPRatio > pRatioThreshold) &&
+				    (results.p_ratio > kJumpRatioThreshold * prevPRatio);
 	if (suspiciousJump) {
 		sess.mJumpCooldown = kJumpCooldownTicks;
-		LOG_DBG("sess%u suspicious p_ratio jump: %.4f → %.4f (%.1fx), cooldown=%u ticks",
-			sessionIdx, static_cast<double>(prevPRatio),
-			static_cast<double>(results.p_ratio),
+		LOG_DBG("sess%u suspicious p_ratio jump: %.4f → %.4f (%.1fx), cooldown=%u ticks", sessionIdx,
+			static_cast<double>(prevPRatio), static_cast<double>(results.p_ratio),
 			static_cast<double>(results.p_ratio / prevPRatio), kJumpCooldownTicks);
 	} else if (sess.mJumpCooldown > 0) {
 		sess.mJumpCooldown--;
 	}
 	sess.mPrevPRatio = results.p_ratio;
 
-	/* First approach: use FRONT_CLIMB_FACTOR (fast).
-	 * Re-entry after confirmed BACK, OR during jump cooldown: use RE_FRONT_CLIMB_FACTOR. */
+	/* UWB RSL veto — bidirectional phone-position discriminator.
+	 *
+	 * rsl_q8 from the ranging diagnostic measures UWB signal level from the PHONE itself
+	 * (not body reflections). When the phone moves behind the door, rsl_q8 INCREASES
+	 * (signal weakens). A positive drop = (current − reference) ≥ kUwbRslDropDb means
+	 * the phone is behind the door.
+	 *
+	 * When vetoed, we set effectiveRawFront=false regardless of radar output. This:
+	 *   • FRONT→BACK: body motion no longer sustains FRONT — score sinks via
+	 *     adaptiveBackSinkFactor until it falls below BACK threshold.
+	 *   • BACK→FRONT: score cannot climb past FRONT threshold.
+	 *
+	 * The veto is intentionally bidirectional — NO !mSideIsFront guard — because the
+	 * previous one-directional veto failed when the score was stuck in the hysteresis
+	 * zone (kBackThresh < score < kFrontThresh) after phone moved behind door. */
+	const bool uwbRslVetoed = sess.mUwbRefSet && sess.mUwbRslValid &&
+				  (sess.mUwbRslEwma - sess.mRefUwbRsl >= kUwbRslDropDb);
+	const bool effectiveRawFront = rawFront && !uwbRslVetoed;
+
+	/* Climb-factor selection for BACK→FRONT transitions (effectiveRawFront=true, score below FRONT).
+	 *
+	 * Three tiers:
+	 *
+	 * 1. kUwbRslProtectFactor (slowest) — first approach AND UWB RSL indicates phone is
+	 *    NOT in front (signal too weak: mUwbRslEwma > kUwbRslMaxFrontDb).
+	 *    The reference-based RSL veto is inactive when mHasBeenFront=false (no reference),
+	 *    so we use a slow climb rate to prevent body-motion from producing a false first-FRONT
+	 *    when the phone is behind the door.  Once the phone genuinely approaches, RSL drops
+	 *    below the threshold and normal FRONT_CLIMB_FACTOR takes over.
+	 *
+	 * 2. kReFrontClimbFactor (fast) — re-entry after FRONT was previously confirmed
+	 *    (mHasBeenFront=true) OR during jump cooldown.  At this point mUwbRefSet=true and
+	 *    the bidirectional UWB RSL veto provides the false-positive protection,
+	 *    so a fast climb rate is safe.
+	 *
+	 * 3. kFrontClimbFactor (medium) — first approach, RSL confirms phone is in front
+	 *    (mUwbRslEwma ≤ kUwbRslMaxFrontDb) or no RSL data yet.  Normal first-detection speed. */
+	const bool uwbRslTooWeakForFront = sess.mUwbRslValid && (sess.mUwbRslEwma > kUwbRslMaxFrontDb);
 	const bool useReFrontFactor = sess.mHasBeenFront || (sess.mJumpCooldown > 0);
-	const float climbFactor = useReFrontFactor ? kReFrontClimbFactor : kFrontClimbFactor;
-	const float asymmetricFactor =
-		(rawFront && !sess.lastResult.mSideIsFront)  ? climbFactor :
-		(!rawFront && sess.lastResult.mSideIsFront)  ? adaptiveBackSinkFactor :
-							       1.0f;
-	const float adaptiveAlpha = kEwmaAlpha * (0.5f + 0.5f * pRatioConfidence) * cirDampFactor *
-				    asymmetricFactor;
-	const float target = rawFront ? 1.0f : 0.0f;
+	const bool useRslProtectFactor = uwbRslTooWeakForFront && !sess.mHasBeenFront;
+	const float climbFactor = useRslProtectFactor ? kUwbRslProtectFactor :
+				  useReFrontFactor    ? kReFrontClimbFactor :
+							kFrontClimbFactor;
+	const float asymmetricFactor = (effectiveRawFront && !sess.lastResult.mSideIsFront) ? climbFactor :
+				       (!effectiveRawFront && sess.lastResult.mSideIsFront) ? adaptiveBackSinkFactor :
+											      1.0f;
+	const float adaptiveAlpha = kEwmaAlpha * (0.5f + 0.5f * pRatioConfidence) * cirDampFactor * asymmetricFactor;
+	const float target = effectiveRawFront ? 1.0f : 0.0f;
 	sess.mFrontScore += adaptiveAlpha * (target - sess.mFrontScore);
 	sess.mFrontScore = std::clamp(sess.mFrontScore, 0.0f, 1.0f);
 
-	/* Confidence ceiling: when the library outputs rawFront=true but pRatioConfidence
-	 * is below kFrontConfidenceRequired, the decision is borderline — p_ratio barely
-	 * exceeds the threshold. A sustained stream of such uncertain ticks can slowly push
-	 * the score past kFrontThresh even though no individual tick carries strong evidence.
-	 * To prevent that, cap the score at kLowConfidenceScoreCap (< kFrontThresh) whenever
-	 * a rawFront=true tick arrives with insufficient confidence.
-	 *
-	 * The cap is lifted the moment confidence rises above kFrontConfidenceRequired, at
-	 * which point the score can grow freely from its pre-charged value. This means a
-	 * genuine approach — where p_ratio first rises slowly then crosses the confidence
-	 * threshold — reaches FRONT quickly from the pre-charged state, while a sustained
-	 * borderline signal (e.g. radar body-detection artefact) is blocked permanently. */
-	const bool cappedByLowConfidence = rawFront && (pRatioConfidence < kFrontConfidenceRequired);
+	/* Confidence ceiling: when effectiveRawFront=true but pRatioConfidence is below
+	 * kFrontConfidenceRequired, the decision is borderline. Cap the score at
+	 * kLowConfidenceScoreCap (< kFrontThresh) to prevent sustained borderline signals
+	 * (e.g. radar body-detection artefact) from crossing the FRONT threshold. */
+	const bool cappedByLowConfidence = effectiveRawFront && (pRatioConfidence < kFrontConfidenceRequired);
 	if (cappedByLowConfidence) {
 		sess.mFrontScore = std::min(sess.mFrontScore, kLowConfidenceScoreCap);
 	}
 
-	/* BLE RSSI veto: physics-based discriminator independent of body-motion.
+	/* UWB RSL hard gate — first approach only.
 	 *
-	 * BLE signals are attenuated 15-25 dB by doors; UWB is far less affected.
-	 * When the phone moves behind the door, BLE RSSI drops measurably while the
-	 * user's body in front of the radar keeps p_ratio high (causing false FRONT).
+	 * The slow-climb factor (kUwbRslProtectFactor) alone is insufficient: given enough
+	 * time (>10 s of continuous body motion), the score can still reach the FRONT
+	 * threshold.  When the session has never confirmed FRONT (mHasBeenFront=false) and
+	 * UWB RSL shows the phone is NOT in front (mUwbRslEwma > kUwbRslMaxFrontDb), cap
+	 * the score hard at kLowConfidenceScoreCap (default 500 < FRONT threshold 650).
 	 *
-	 * Condition: currently in BACK state, p_ratio says rawFront=true, but BLE RSSI
-	 * has fallen more than kBleRssiDropDb below the reference captured at last FRONT
-	 * confirmation → cap score at kBleRssiScoreCap so the FRONT threshold cannot
-	 * be reached regardless of p_ratio alone.
-	 *
-	 * The veto is only active during BACK→FRONT climbing. Once FRONT is confirmed,
-	 * normal hysteresis keeps the state (reference was captured at that point).
-	 * The cap is lifted automatically as soon as RSSI recovers above the threshold. */
-	const bool bleVetoed = sess.mBleRefSet && sess.mBleRssiValid && rawFront &&
-			       !sess.lastResult.mSideIsFront &&
-			       (sess.mRefBleRssi - sess.mBleRssiEwma >= kBleRssiDropDb);
-	if (bleVetoed) {
-		sess.mFrontScore = std::min(sess.mFrontScore, kBleRssiScoreCap);
-	}
-
-	/* UWB RSL veto: uses the UWB Received Signal Level from the ranging diagnostic.
-	 *
-	 * Unlike p_ratio (derived from radar CIR body reflections), UWB RSL measures
-	 * the signal received from the PHONE's UWB transmitter. When the phone is
-	 * behind the door, UWB signal is attenuated by ~5-15 dB.
-	 *
-	 * NOTE on sign convention: rsl_q8 is stored as an UNSIGNED Q8.8 "absolute value"
-	 * in dBm (e.g., -67 dBm → stored as 67 × 256 = 17203). Higher stored value =
-	 * larger absolute dBm = more negative actual signal = WEAKER.
-	 * Therefore when phone goes behind door: mUwbRslEwma INCREASES (e.g., 67 → 80).
-	 * Comparison direction: veto when (current - reference) >= threshold. */
-	const bool uwbRslVetoed = sess.mUwbRefSet && sess.mUwbRslValid && rawFront &&
-				  !sess.lastResult.mSideIsFront &&
-				  (sess.mUwbRslEwma - sess.mRefUwbRsl >= kUwbRslDropDb);
-	if (uwbRslVetoed) {
-		sess.mFrontScore = std::min(sess.mFrontScore, kBleRssiScoreCap);
+	 * This makes it physically impossible to reach FRONT on first approach unless the
+	 * UWB signal from the phone is strong enough to indicate it is genuinely in front.
+	 * Once mHasBeenFront=true, the bidirectional RSL veto takes over instead. */
+	const bool cappedByRslGate = effectiveRawFront && !sess.mHasBeenFront && uwbRslTooWeakForFront;
+	if (cappedByRslGate) {
+		sess.mFrontScore = std::min(sess.mFrontScore, kLowConfidenceScoreCap);
 	}
 
 	/* 4. Hysteresis decision from score. */
@@ -419,15 +388,6 @@ int Disambiguator::Process(Result &out, uint8_t sessionIdx)
 
 	if (out.mSideIsFront) {
 		sess.mHasBeenFront = true;
-
-		/* BLE RSSI reference: capture once on first FRONT.
-		 * BLE RSSI is read only every 500ms so continuous tracking adds little value. */
-		if (!sess.mBleRefSet && sess.mBleRssiValid) {
-			sess.mRefBleRssi = sess.mBleRssiEwma;
-			sess.mBleRefSet = true;
-			LOG_DBG("sess%u BLE RSSI reference captured: %.1f dBm", sessionIdx,
-				static_cast<double>(sess.mRefBleRssi));
-		}
 
 		/* UWB RSL reference: continuously track in-front RSL while FRONT is confirmed.
 		 *
@@ -448,8 +408,7 @@ int Disambiguator::Process(Result &out, uint8_t sessionIdx)
 				sess.mRefUwbRsl = sess.mUwbRslEwma;
 				sess.mUwbRefSet = true;
 				LOG_DBG("sess%u UWB RSL reference init: %.1f dBm (=-%ddBm)", sessionIdx,
-					static_cast<double>(sess.mRefUwbRsl),
-					static_cast<int>(sess.mRefUwbRsl));
+					static_cast<double>(sess.mRefUwbRsl), static_cast<int>(sess.mRefUwbRsl));
 			} else {
 				sess.mRefUwbRsl += kUwbRefAlpha * (sess.mUwbRslEwma - sess.mRefUwbRsl);
 			}
@@ -460,25 +419,21 @@ int Disambiguator::Process(Result &out, uint8_t sessionIdx)
 	const int32_t meanPdoaMilliDeg = static_cast<int32_t>(results.mean_pdoa * 1000.0f);
 	const int32_t scorePermille = static_cast<int32_t>(sess.mFrontScore * 1000.0f);
 	const int32_t alphaPermille = static_cast<int32_t>(adaptiveAlpha * 1000.0f);
-	const bool reFrontClimb = rawFront && !sess.lastResult.mSideIsFront && useReFrontFactor;
+	const bool reFrontClimb = effectiveRawFront && !sess.lastResult.mSideIsFront && useReFrontFactor;
 	/* Log BLE RSSI (0 if not yet received).
 	 * UWB RSL displayed as negative dBm (rsl_q8 is "absolute value", so negate for display).
 	 * e.g. uwb=-67dBm = strong (phone in front), uwb=-80dBm = weak (phone behind door).
 	 * uwb-drop shows (current - ref) in dBm: positive = phone moved away/behind door. */
-	const int32_t bleRssiInt = sess.mBleRssiValid ? static_cast<int32_t>(sess.mBleRssiEwma) : 0;
 	const int32_t uwbRslNeg = sess.mUwbRslValid ? -static_cast<int32_t>(sess.mUwbRslEwma) : 0;
 	/* uwbDrop > 0 = phone further/behind door vs reference (higher absolute dBm = weaker) */
-	const int32_t uwbDropDb = (sess.mUwbRefSet && sess.mUwbRslValid)
-					 ? static_cast<int32_t>(sess.mUwbRslEwma - sess.mRefUwbRsl)
-					 : 0;
-	LOG_DBG("sess%u %s pratio=%d cir=%d blk=%d dist=%ucm score=%d/1000 alpha=%d/1000 ble=%ddBm uwb=%ddBm drop=%ddB%s%s%s%s%s",
-		sessionIdx, out.mSideIsFront ? "FRONT" : "BACK ", pRatioU6, results.CIR,
-		results.noise_blocks, results.distance_cm, scorePermille, alphaPermille, bleRssiInt,
-		uwbRslNeg, uwbDropDb,
+	const int32_t uwbDropDb =
+		(sess.mUwbRefSet && sess.mUwbRslValid) ? static_cast<int32_t>(sess.mUwbRslEwma - sess.mRefUwbRsl) : 0;
+	LOG_DBG("sess%u %s pratio=%d cir=%d blk=%d dist=%ucm score=%d/1000 alpha=%d/1000 uwb=%ddBm drop=%ddB%s%s%s%s%s%s",
+		sessionIdx, out.mSideIsFront ? "FRONT" : "BACK ", pRatioU6, results.CIR, results.noise_blocks,
+		results.distance_cm, scorePermille, alphaPermille, uwbRslNeg, uwbDropDb,
 		cappedByLowConfidence ? " [cap]" : "",
-		bleVetoed ? " [ble-veto]" : "",
-		uwbRslVetoed ? " [uwb-veto]" : "",
-		reFrontClimb ? " [re]" : "",
+		uwbRslVetoed ? " [uwb-veto]" : "", reFrontClimb ? " [re]" : "",
+		useRslProtectFactor ? " [rsl-prot]" : "", cappedByRslGate ? " [rsl-gate]" : "",
 		suspiciousJump ? " [jump]" : "");
 
 	out.mDistanceCm = results.distance_cm;

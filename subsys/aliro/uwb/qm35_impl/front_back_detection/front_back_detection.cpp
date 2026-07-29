@@ -20,12 +20,8 @@
 #include <doorlock/utils/utils.h>
 
 #include <zephyr/bluetooth/conn.h>
-#include <zephyr/bluetooth/hci.h>
-#include <zephyr/bluetooth/hci_types.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/net_buf.h>
-#include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/slist.h>
 
 #include <errno.h>
@@ -70,57 +66,6 @@ void LogFrontBackDetectionResult(uint8_t sessionIdx, size_t activeRangingSession
 		result.mDistanceCm, pRatioU6, result.mCir, result.mNoiseBlocks, pdoa.mSign, pdoa.mInteger,
 		pdoa.mFraction);
 #endif
-}
-
-/* Minimum interval between BLE RSSI reads per session (ms).
- * HCI READ_RSSI is a blocking round-trip; ~2 Hz is more than sufficient. */
-constexpr int64_t kBleRssiReadIntervalMs{ 500 };
-
-/* Per-session timestamp of the last BLE RSSI HCI read. */
-int64_t sBleRssiLastReadMs[CONFIG_DOOR_LOCK_BLE_UWB_MAX_SESSIONS]{};
-
-/* Reads BLE RSSI for a connection via the HCI Read RSSI command.
- * Safe to call from the system workqueue (CONFIG_BT_RECV_WORKQ_BT=1 means BT RX
- * uses a dedicated BT workqueue, so bt_hci_cmd_send_sync() will not deadlock here).
- * Returns the RSSI in dBm, or BT_HCI_LE_RSSI_NOT_AVAILABLE (0x7F) on failure. */
-int8_t ReadBleRssiHci(bt_conn *conn)
-{
-	uint16_t handle;
-	int err = bt_hci_get_conn_handle(conn, &handle);
-	if (err != 0) {
-		LOG_DBG("bt_hci_get_conn_handle failed: %d", err);
-		return BT_HCI_LE_RSSI_NOT_AVAILABLE;
-	}
-
-	/* Use K_FOREVER: the HCI round-trip is ~1-5 ms; on the system workqueue this is
-	 * acceptable since BT uses its own dedicated bt_work_q workqueue. */
-	net_buf *buf = bt_hci_cmd_alloc(K_FOREVER);
-	if (!buf) {
-		LOG_ERR("BLE RSSI: bt_hci_cmd_alloc returned NULL");
-		return BT_HCI_LE_RSSI_NOT_AVAILABLE;
-	}
-
-	auto *cp = static_cast<bt_hci_cp_read_rssi *>(net_buf_add(buf, sizeof(bt_hci_cp_read_rssi)));
-	cp->handle = sys_cpu_to_le16(handle);
-
-	net_buf *rsp = nullptr;
-	err = bt_hci_cmd_send_sync(BT_HCI_OP_READ_RSSI, buf, &rsp);
-	if (err != 0) {
-		LOG_DBG("bt_hci_cmd_send_sync(READ_RSSI) failed: %d", err);
-		return BT_HCI_LE_RSSI_NOT_AVAILABLE;
-	}
-	if (!rsp) {
-		LOG_DBG("bt_hci_cmd_send_sync(READ_RSSI) returned null response");
-		return BT_HCI_LE_RSSI_NOT_AVAILABLE;
-	}
-
-	const auto *rp = static_cast<const bt_hci_rp_read_rssi *>(static_cast<const void *>(rsp->data));
-	const int8_t rssi = (rp->status == 0) ? rp->rssi : INT8_C(BT_HCI_LE_RSSI_NOT_AVAILABLE);
-	if (rp->status != 0) {
-		LOG_DBG("READ_RSSI HCI status error: 0x%02x", rp->status);
-	}
-	net_buf_unref(rsp);
-	return rssi;
 }
 
 } // namespace
@@ -208,16 +153,6 @@ void FrontBackDetection::ProcessSessions(sys_slist_t *activeSessions)
 
 	Disambiguation::Result result{};
 
-	/* BLE sessions whose RSSI we want to read after releasing the mutex.
-	 * HCI READ_RSSI is a synchronous blocking call — must NOT be called under
-	 * the sessions mutex (risk of deadlock with BT stack callbacks). */
-	struct BleSessionEntry {
-		bt_conn *conn;
-		uint8_t sessionIdx;
-	};
-	BleSessionEntry bleSessions[CONFIG_DOOR_LOCK_BLE_UWB_MAX_SESSIONS]{};
-	uint8_t bleSessionCount{ 0 };
-
 	SessionContext *sessionCtx{};
 	{
 		DoorLock::Utils::MutexGuard lock{ *mSessionsMutex };
@@ -238,34 +173,8 @@ void FrontBackDetection::ProcessSessions(sys_slist_t *activeSessions)
 				LogFrontBackDetectionResult(sessionCtx->mDisambiguationSessionIdx,
 							    activeRangingSessions, result);
 			}
-
-			/* Collect BLE sessions for post-mutex RSSI reading. */
-			if (sessionCtx->mSessionContextData.IsBle() &&
-			    bleSessionCount < ARRAY_SIZE(bleSessions)) {
-				bt_conn *conn = sessionCtx->mSessionContextData.GetBtConn();
-				/* bt_conn_ref keeps the connection alive until we release it below. */
-				bt_conn_ref(conn);
-				bleSessions[bleSessionCount++] = { conn,
-								   sessionCtx->mDisambiguationSessionIdx };
-			}
 		}
 	} /* sessions mutex released */
-
-	/* Phase 2: read BLE RSSI outside the mutex and feed samples to the disambiguator.
-	 * Throttled to kBleRssiReadIntervalMs to avoid flooding HCI. */
-	const int64_t nowMs = k_uptime_get();
-	for (uint8_t i = 0; i < bleSessionCount; i++) {
-		const uint8_t idx = bleSessions[i].sessionIdx;
-		if (nowMs - sBleRssiLastReadMs[idx] >= kBleRssiReadIntervalMs) {
-			const int8_t rssi = ReadBleRssiHci(bleSessions[i].conn);
-			if (rssi != static_cast<int8_t>(BT_HCI_LE_RSSI_NOT_AVAILABLE)) {
-				LOG_DBG("sess%u BLE RSSI read: %d dBm", idx, rssi);
-				Disambiguation::Disambiguator::Instance().AddBleRssiMeasurement(rssi, idx);
-			}
-			sBleRssiLastReadMs[idx] = nowMs;
-		}
-		bt_conn_unref(bleSessions[i].conn);
-	}
 
 	ScheduleProcessing();
 }

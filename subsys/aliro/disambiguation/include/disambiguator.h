@@ -80,20 +80,6 @@ public:
 	 */
 	void AddCirMeasurement(uint8_t *data, uint16_t size);
 
-	/** @brief Feeds a BLE RSSI sample for a session.
-	 *
-	 *  BLE signals are attenuated significantly more by doors than UWB (~15-25 dB extra loss).
-	 *  When the smoothed RSSI drops more than BLE_RSSI_DROP_DB below the reference captured
-	 *  at first FRONT confirmation, the disambiguator caps the score to prevent body-motion
-	 *  radar spikes from triggering a false FRONT re-detection.
-	 *
-	 *  Call this ~every 500ms while a BLE ranging session is active.
-	 *
-	 *  @param rssiDbm Measured BLE connection RSSI in dBm (typically -30 to -100).
-	 *  @param sessionIdx Session index in @c [0, CONFIG_DOOR_LOCK_BLE_UWB_MAX_SESSIONS).
-	 */
-	void AddBleRssiMeasurement(int8_t rssiDbm, uint8_t sessionIdx);
-
 	/** @brief Runs disambiguation when enough CIR, distance, and PDOA samples are buffered.
 	 *  @param[out] out Filled with door/side decision and algorithm metrics on success.
 	 *  @param sessionIdx Session index in @c [0, CONFIG_DOOR_LOCK_BLE_UWB_MAX_SESSIONS).
@@ -154,21 +140,6 @@ private:
 		 * During cooldown the BACK→FRONT climb is reduced to RE_FRONT_CLIMB_FACTOR
 		 * regardless of mHasBeenFront, blocking false FRONT from sudden body-motion spikes. */
 		uint8_t mJumpCooldown{ 0 };
-
-		/* BLE RSSI discriminator.
-		 *
-		 * BLE signals are attenuated 15-25 dB by a door; UWB is much less affected.
-		 * When the phone moves behind the door, BLE RSSI drops noticeably while the
-		 * body in front of the radar can still trigger high p_ratio, causing false FRONT.
-		 *
-		 * mBleRssiEwma  — smoothed BLE RSSI in dBm (EWMA, updated via AddBleRssiMeasurement).
-		 * mBleRssiValid — true once at least one RSSI sample has been received.
-		 * mRefBleRssi   — RSSI captured when FRONT was first confirmed; used as baseline.
-		 * mBleRefSet    — true when mRefBleRssi has been captured. */
-		float mBleRssiEwma{ 0.0f };
-		bool mBleRssiValid{ false };
-		float mRefBleRssi{ 0.0f };
-		bool mBleRefSet{ false };
 
 		/* UWB RSL discriminator.
 		 *

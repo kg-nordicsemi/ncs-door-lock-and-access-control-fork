@@ -133,7 +133,7 @@ config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BACK_SCORE_THRESHOLD
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_FRONT_CLIMB_FACTOR
 	int "BACK-to-FRONT EWMA climb factor for first approach (permille, 1-1000)"
-	default 1000
+	default 300
 	range 1 1000
 	help
 	  Multiplier applied to the EWMA alpha when climbing from BACK to FRONT
@@ -269,44 +269,6 @@ config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_DISTANCE_OFFSET_CM
 	  before feeding the disambiguation algorithm. Compensates for
 	  systematic ranging bias.
 
-config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BLE_RSSI_DROP_DB
-	int "BLE RSSI drop threshold for phone-behind-door veto (dB, 1-40)"
-	default 5
-	range 1 40
-	help
-	  When the phone is behind the door, BLE signal is attenuated by a wooden
-	  or metal door (~10-25 dB extra loss). If the smoothed BLE RSSI drops
-	  more than this many dB below the reference level captured when FRONT was
-	  last confirmed, the disambiguator caps the score to BLE_RSSI_SCORE_CAP,
-	  preventing body-motion false re-FRONT detections.
-	  Default 12 dB gives headroom for environmental variation while detecting
-	  typical door attenuation (15-25 dB for solid wooden doors).
-	  Increase toward 20 if you get false vetoes; decrease toward 8 for thinner
-	  or hollow doors.
-
-config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BLE_RSSI_ALPHA
-	int "BLE RSSI EWMA smoothing factor (permille, 1-1000)"
-	default 200
-	range 1 1000
-	help
-	  EWMA coefficient for smoothing BLE RSSI samples before comparison.
-	  Higher values track rapid RSSI changes faster but are noisier.
-	  Lower values produce a stable average but react more slowly.
-	  At 200 (=0.2) the EWMA reaches 95% of a step change in ~14 samples
-	  (~7 seconds at 2 samples/second). BLE RSSI is read every 500ms.
-
-config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BLE_RSSI_SCORE_CAP
-	int "Maximum EWMA score when BLE RSSI veto is active (permille, 1-999)"
-	default 300
-	range 1 999
-	help
-	  When the BLE RSSI drop exceeds BLE_RSSI_DROP_DB the score is capped
-	  at this value. Must be strictly below FRONT_SCORE_THRESHOLD (default 650)
-	  so that body-motion radar spikes cannot alone cross into FRONT territory
-	  when the phone is confirmed to be behind the door.
-	  At 300 (=0.3) a strong and sustained body-motion spike still needs the
-	  BLE RSSI to recover before FRONT can be reported.
-
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_UWB_RSL_DROP_DB
 	int "UWB RSL drop threshold for phone-behind-door veto (dB, 1-30)"
 	default 5
@@ -317,7 +279,7 @@ config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_UWB_RSL_DROP_DB
 	  from the PHONE'S UWB transmitter - independent of body reflections.
 	  If the smoothed UWB RSL drops more than this many dB below the reference
 	  captured at first FRONT confirmation, the score is capped to
-	  BLE_RSSI_SCORE_CAP, blocking body-motion false FRONT re-detections.
+	  LOW_CONFIDENCE_SCORE_CAP, blocking body-motion false FRONT re-detections.
 	  This works without any HCI overhead since rsl_q8 is already available
 	  from the ranging diagnostic report.
 	  Default 8 dB is conservative: typical wooden door attenuates UWB by 8-15 dB.
@@ -332,6 +294,42 @@ config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_UWB_RSL_ALPHA
 	  Higher values track rapid RSL changes faster but are noisier.
 	  At 300 (=0.3) the EWMA reaches 95% of a step change in ~9 samples
 	  (~0.6 seconds at ~14 Hz update rate).
+
+config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_UWB_RSL_MAX_FRONT_DB
+	int "Absolute UWB RSL upper limit for phone-in-front (dBm magnitude, 50-100)"
+	default 75
+	range 50 100
+	help
+	  Absolute UWB RSL gate for the FIRST-approach scenario (mHasBeenFront=false).
+	  rsl_q8 encodes the received-signal level as a positive magnitude: lower value
+	  = stronger signal = phone closer/in-front; higher value = weaker signal =
+	  phone far away or behind a door.
+	  If the smoothed UWB RSL exceeds this threshold while the session has never
+	  confirmed FRONT, the BACK->FRONT climb uses UWB_RSL_PROTECT_FACTOR (slow)
+	  instead of FRONT_CLIMB_FACTOR (fast), preventing body-motion from triggering
+	  a false FRONT on first approach when the phone is behind the door.
+	  Typical values:
+	    Phone in front (50-90 cm): RSL ≈ 65-72 dBm magnitude.
+	    Phone behind wooden door:  RSL ≈ 76-82 dBm magnitude.
+	  Default 75 sits safely in the gap for a standard wooden interior door.
+	  Decrease toward 70 for thinner/glass doors; increase toward 80 if false
+	  protection triggers on legitimate approaches (e.g. when door is fully open).
+
+config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_UWB_RSL_PROTECT_FACTOR
+	int "BACK-to-FRONT slow factor when RSL indicates phone is not in front (permille, 1-1000)"
+	default 100
+	range 1 1000
+	help
+	  Applied instead of FRONT_CLIMB_FACTOR when the UWB RSL exceeds
+	  UWB_RSL_MAX_FRONT_DB AND the session has never confirmed FRONT
+	  (mHasBeenFront=false).  In this state the reference-based RSL veto is not
+	  yet active, so we rely on slow climb rate to prevent body-motion from
+	  causing a false first-FRONT when the phone is behind the door.
+	  At 100 (=0.1) the score needs ~2 seconds of sustained full-confidence
+	  rawFront=true signal to cross the FRONT threshold — longer than typical
+	  body-motion episodes (~0.5-1.5 s).
+	  Once FRONT has been confirmed once (mHasBeenFront=true), this factor is
+	  no longer used; the reference-based RSL veto takes over instead.
 
 module = DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION
 module-str = "UWB disambiguation"
