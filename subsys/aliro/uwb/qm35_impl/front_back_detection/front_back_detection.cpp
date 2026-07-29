@@ -216,8 +216,13 @@ void FrontBackDetection::HandleSessionEvent(const aliro_uwb_session_event &event
 				LOG_INF("Front/back detection reset for new ranging session");
 				ScheduleProcessing();
 			} else if (sessionCtx.mRangingSessionState == RangingSessionState::RangingSuspended) {
-				ResetSession(sessionCtx);
-				LOG_INF("Front/back detection reset on ranging session resume");
+				/* Resume belongs to the same authenticated phone session. Preserve the
+				 * disambiguation state, especially the in-front UWB RSL reference.
+				 *
+				 * Resetting here allowed a phone already behind the door to establish
+				 * its weak RSL as a new FRONT baseline. The reference-based UWB veto
+				 * then saw drop=0 dB and body motion could cause a false FRONT. */
+				LOG_INF("Front/back detection state preserved on ranging session resume");
 				ScheduleProcessing();
 			}
 		} else if (oldState == CHERRY_CCC_SESSION_STATE_ACTIVE && newState == CHERRY_CCC_SESSION_STATE_IDLE) {
