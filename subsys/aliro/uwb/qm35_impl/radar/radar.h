@@ -48,31 +48,48 @@ public:
 	 */
 	void Stop();
 
-	/** @brief Schedule radar session start after the empirically determined delay.
+	/** @brief Schedule radar session start.
 	 *
 	 * @return 0 on success, negative error code otherwise.
 	 */
 	int ScheduleStart();
 
 private:
+	enum class LifecycleState : uint8_t {
+		Stopped,
+		Starting,
+		Running,
+		Stopping,
+	};
+
 	struct StartWork {
 		k_work mWork;
 		UwbRadar *mOwner{ nullptr };
 	};
 
+	struct StopWork {
+		k_work mWork;
+		UwbRadar *mOwner{ nullptr };
+	};
+
 	static void StartWorkHandler(k_work *work);
+	static void StopWorkHandler(k_work *work);
 	static void OnSessionEvent(const aliro_uwb_session_event &event, const SessionContext &sessionCtx, void *ctx);
 	static void RadarCallback(cherry_radar_event *event, void *userData);
 
 	void CancelStart();
 	int StartSession();
+	void StopSession();
+	void CompleteStop();
 	void HandleSessionEvent(const aliro_uwb_session_event &event, const SessionContext &sessionCtx);
 
 	cherry *mCtx{ nullptr };
 	cherry_radar_session *mSession{ nullptr };
-	bool mRunning{ false };
+	LifecycleState mState{ LifecycleState::Stopped };
+	bool mStartRequestedDuringStop{ false };
 	k_mutex mMutex{};
 	StartWork mStartWork{};
+	StopWork mStopWork{};
 	OnRadarMeasurement mOnRadarMeasurement{ nullptr };
 	OnSessionStopped mOnSessionStopped{ nullptr };
 	uint8_t mActiveSessionCount{ 0 };

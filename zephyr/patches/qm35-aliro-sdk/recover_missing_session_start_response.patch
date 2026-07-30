@@ -1,0 +1,104 @@
+diff --git a/project/cherry/cherry/core/src/cherry_session.c b/project/cherry/cherry/core/src/cherry_session.c
+index f957e3f..e37320d 100644
+--- a/project/cherry/cherry/core/src/cherry_session.c
++++ b/project/cherry/cherry/core/src/cherry_session.c
+@@ -347,8 +347,8 @@ static bool wait_stop_state(struct cherry_session *session)
+ 	return false;
+ }
+ 
+-static void wait_state(struct cherry_session *session,
+-		       enum cherry_session_state state)
++static bool wait_state_notification(struct cherry_session *session,
++				    enum cherry_session_state state)
+ {
+ 	int64_t timeout;
+ 	int64_t timeout_ms;
+@@ -356,23 +356,33 @@ static void wait_state(struct cherry_session *session,
+ 	timeout = qtime_get_uptime_us() + CHERRY_NOTIFICATION_TIMEOUT_US;
+ 	do {
+ 		if (session->session_state == state)
+-			return;
++			return true;
+ 		timeout_ms = (timeout - qtime_get_uptime_us()) / 1000;
+ 		if (timeout_ms <= 0)
+ 			break;
+ 
+ 		if (!session->cherry_ctx) {
+ 			QLOGE("cherry_ctx is NULL during wait_state");
+-			return;
++			return false;
+ 		}
+ 
+ 		cherry_thread_process_prio_task(
+ 			&session->cherry_ctx->thread_ctx, timeout_ms);
+ 	} while (true);
+ 
++	return false;
++}
++
++static bool wait_state(struct cherry_session *session,
++		       enum cherry_session_state state)
++{
++	if (wait_state_notification(session, state))
++		return true;
++
+ 	QLOGE("Session state %s notification not received.",
+ 	      get_state_str(state));
+ 	cherry_session_update_error_state(session, CHERRY_ERR_UWBS_TIMEOUT);
++	return false;
+ }
+ 
+ /* session destroy. */
+@@ -611,7 +621,9 @@ static void cherry_session_thread_task_start(struct cherry *cherry_ctx,
+ {
+ 	struct cherry_session *session = (struct cherry_session *)context;
+ 	int r;
++	int uwbs_state;
+ 	enum cherry_err err;
++	enum uci_status_code state_status;
+ 
+ 	if (abort)
+ 		return;
+@@ -629,13 +641,40 @@ static void cherry_session_thread_task_start(struct cherry *cherry_ctx,
+ 	r = cherry_uci_client_session_start_session(
+ 		session->cherry_ctx->session_client_ctx,
+ 		session->session_handle);
+-	if (r) {
++	if (r && r != UCI_STATUS_UCI_MESSAGE_RETRY) {
+ 		QLOGE("%s: error starting session with error %d", __func__, r);
+ 		cherry_session_update_error_state(session, cherry_get_error(r));
+ 		return;
+ 	}
+ 
+-	wait_state(session, CHERRY_SESSION_STATE_ACTIVE);
++	if (wait_state_notification(session, CHERRY_SESSION_STATE_ACTIVE)) {
++		if (r == UCI_STATUS_UCI_MESSAGE_RETRY)
++			QLOGW("%s: SESSION_START response missing, ACTIVE notification received.",
++			      __func__);
++		return;
++	}
++
++	/*
++	 * QM35 can start a session without delivering either the SESSION_START
++	 * response or the ACTIVE notification. Query the authoritative UWBS state
++	 * before declaring a transport failure and force-stopping every session.
++	 */
++	uwbs_state = UCI_SESSION_STATE_ERROR;
++	state_status = cherry_uci_client_session_get_state(
++		session->cherry_ctx->session_client_ctx, session->session_handle,
++		&uwbs_state);
++
++	if (state_status == UCI_STATUS_OK &&
++	    uwbs_state == UCI_SESSION_STATE_ACTIVE) {
++		session->session_state = CHERRY_SESSION_STATE_ACTIVE;
++		QLOGW("%s: ACTIVE notification missing, SESSION_GET_STATE confirmed ACTIVE.",
++		      __func__);
++		return;
++	}
++
++	QLOGE("%s: ACTIVE notification missing and SESSION_GET_STATE did not confirm ACTIVE (status=%d, state=%d).",
++	      __func__, state_status, uwbs_state);
++	cherry_session_update_error_state(session, CHERRY_ERR_UWBS_TIMEOUT);
+ }
+ 
+ enum cherry_err cherry_session_start(struct cherry_session *session)

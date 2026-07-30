@@ -53,7 +53,8 @@ void UwbRadar::Init(cherry *ctx, OnRadarMeasurement onRadarMeasurement, OnSessio
 {
 	mCtx = ctx;
 	mSession = nullptr;
-	mRunning = false;
+	mState = LifecycleState::Stopped;
+	mStartRequestedDuringStop = false;
 	mOnRadarMeasurement = onRadarMeasurement;
 	mOnSessionStopped = onSessionStopped;
 
@@ -61,6 +62,8 @@ void UwbRadar::Init(cherry *ctx, OnRadarMeasurement onRadarMeasurement, OnSessio
 
 	k_work_init(&mStartWork.mWork, StartWorkHandler);
 	mStartWork.mOwner = this;
+	k_work_init(&mStopWork.mWork, StopWorkHandler);
+	mStopWork.mOwner = this;
 
 	SessionEventHub::Register(mSubscriber);
 }
@@ -69,33 +72,44 @@ int UwbRadar::ScheduleStart()
 {
 	{
 		MutexGuard lock{ mMutex };
-		VerifyOrReturnValue(!mRunning, -EALREADY, LOG_ERR("Radar session already running"));
+
+		if (mState == LifecycleState::Stopping) {
+			/* A ranging session resumed before the previous radar session reached
+			 * DEINIT. Coalesce repeated requests and restart after DEINIT. */
+			mStartRequestedDuringStop = true;
+			return 0;
+		}
+
+		VerifyOrReturnValue(mState == LifecycleState::Stopped, -EALREADY);
+		mState = LifecycleState::Starting;
 	}
-	// Defer to work queue: Cherry API must not be called from Cherry callbacks.
+
 	const int ret = k_work_submit(&mStartWork.mWork);
-	VerifyOrReturnValue(ret >= 0, ret);
+	if (ret < 0) {
+		MutexGuard lock{ mMutex };
+		mState = LifecycleState::Stopped;
+		return ret;
+	}
 	return 0;
 }
 
 void UwbRadar::Stop()
 {
+	LifecycleState previousState;
 	{
 		MutexGuard lock{ mMutex };
-		VerifyOrReturn(mRunning);
+		mStartRequestedDuringStop = false;
+		VerifyOrReturn(mState != LifecycleState::Stopped && mState != LifecycleState::Stopping);
+		previousState = mState;
+		mState = LifecycleState::Stopping;
 	}
-	// CancelStart must run outside mMutex to avoid deadlock with StartSession.
-	CancelStart();
 
-	VerifyAndCall(mOnSessionStopped);
-
-	MutexGuard lock{ mMutex };
-	VerifyOrReturn(mRunning && mSession);
-
-	cherry_radar_session_destroy(mSession);
-	mSession = nullptr;
-	mRunning = false;
-
-	LOG_INF("Radar session stopped");
+	const int ret = k_work_submit(&mStopWork.mWork);
+	if (ret < 0) {
+		MutexGuard lock{ mMutex };
+		mState = previousState;
+		LOG_ERR("Failed to schedule radar session stop: %d", ret);
+	}
 }
 
 void UwbRadar::CancelStart()
@@ -112,18 +126,38 @@ void UwbRadar::StartWorkHandler(k_work *work)
 	startWork->mOwner->StartSession();
 }
 
+void UwbRadar::StopWorkHandler(k_work *work)
+{
+	auto *stopWork = CONTAINER_OF(work, StopWork, mWork);
+
+	VerifyOrReturn(stopWork->mOwner);
+	stopWork->mOwner->StopSession();
+}
+
 int UwbRadar::StartSession()
 {
 	MutexGuard lock{ mMutex };
 
-	VerifyOrReturnValue(!mRunning, 0);
-	VerifyOrReturnValue(mCtx, -EINVAL, LOG_WRN("Cherry context not ready for radar"));
-	VerifyOrReturnValue(!mSession, -EIO, LOG_ERR("Radar session already created"));
+	/* Stop() can change the state while this work item is still queued. */
+	VerifyOrReturnValue(mState == LifecycleState::Starting, 0);
+	if (!mCtx) {
+		mState = LifecycleState::Stopped;
+		LOG_WRN("Cherry context not ready for radar");
+		return -EINVAL;
+	}
+	if (mSession) {
+		LOG_ERR("Previous radar session has not reached DEINIT");
+		goto exit;
+	}
 
 	mSession = cherry_radar_session_create(mCtx, &RadarCallback, this, kRadarSessionId, kRadarBurstPeriodMs,
 					       kRadarSweepPeriodRstu, kRadarSweepsPerBurst, kRadarSamplesPerSweep,
 					       kRadarAntSetId);
-	VerifyOrReturnValue(mSession, -EIO, LOG_ERR("cherry_radar_session_create failed"));
+	if (!mSession) {
+		mState = LifecycleState::Stopped;
+		LOG_ERR("cherry_radar_session_create failed");
+		return -EIO;
+	}
 
 	VerifyOrExit(cherry_radar_session_set_rframe_config(mSession, kRadarRframeConfig) == CHERRY_ERR_NONE,
 		     LOG_ERR("radar set_rframe_config failed"));
@@ -142,15 +176,64 @@ int UwbRadar::StartSession()
 	VerifyOrExit(cherry_radar_session_start(mSession) == CHERRY_ERR_NONE,
 		     LOG_ERR("cherry_radar_session_start failed"));
 
-	mRunning = true;
+	mState = LifecycleState::Running;
 	LOG_INF("Radar session started");
 
 	return 0;
 
 exit:
-	cherry_radar_session_destroy(mSession);
-	mSession = nullptr;
+	if (mSession) {
+		/* Keep the pointer until Cherry confirms DEINIT. */
+		mState = LifecycleState::Stopping;
+		cherry_radar_session_destroy(mSession);
+	} else {
+		mState = LifecycleState::Stopped;
+	}
 	return -EIO;
+}
+
+void UwbRadar::StopSession()
+{
+	/* CancelStart must run outside mMutex to avoid deadlock with StartSession. */
+	CancelStart();
+
+	cherry_radar_session *session{};
+	{
+		MutexGuard lock{ mMutex };
+		VerifyOrReturn(mState == LifecycleState::Stopping);
+		session = mSession;
+	}
+
+	VerifyAndCall(mOnSessionStopped);
+
+	if (!session) {
+		CompleteStop();
+		return;
+	}
+
+	/* Destruction is asynchronous. A new radar session is not allowed until
+	 * RadarCallback receives DEINIT for this object. */
+	cherry_radar_session_destroy(session);
+	LOG_INF("Radar session teardown requested");
+}
+
+void UwbRadar::CompleteStop()
+{
+	bool restart;
+	{
+		MutexGuard lock{ mMutex };
+		mSession = nullptr;
+		mState = LifecycleState::Stopped;
+		restart = mStartRequestedDuringStop && mActiveSessionCount > 0;
+		mStartRequestedDuringStop = false;
+	}
+
+	LOG_INF("Radar session stopped");
+
+	if (restart) {
+		LOG_INF("Restarting radar after teardown completed");
+		std::ignore = ScheduleStart();
+	}
 }
 
 void UwbRadar::OnSessionEvent(const aliro_uwb_session_event &event, const SessionContext &sessionCtx, void *ctx)
@@ -168,17 +251,24 @@ void UwbRadar::HandleSessionEvent(const aliro_uwb_session_event &event, const Se
 		const auto *status = event.data.status;
 		const auto oldState = sessionCtx.mSessionState;
 		const auto newState = status->session_state;
+		bool shouldStop = false;
 
-		if (newState == CHERRY_CCC_SESSION_STATE_ACTIVE && oldState != CHERRY_CCC_SESSION_STATE_ACTIVE) {
-			mActiveSessionCount++;
-		} else if (oldState == CHERRY_CCC_SESSION_STATE_ACTIVE && newState != CHERRY_CCC_SESSION_STATE_ACTIVE) {
-			if (mActiveSessionCount > 0) {
-				mActiveSessionCount--;
+		{
+			MutexGuard lock{ mMutex };
+			if (newState == CHERRY_CCC_SESSION_STATE_ACTIVE &&
+			    oldState != CHERRY_CCC_SESSION_STATE_ACTIVE) {
+				mActiveSessionCount++;
+			} else if (oldState == CHERRY_CCC_SESSION_STATE_ACTIVE &&
+				   newState != CHERRY_CCC_SESSION_STATE_ACTIVE) {
+				if (mActiveSessionCount > 0) {
+					mActiveSessionCount--;
+				}
+				// Stop radar only when the last ranging session ends.
+				shouldStop = (mActiveSessionCount == 0);
 			}
-			// Stop radar only when the last ranging session ends.
-			if (mActiveSessionCount == 0) {
-				Stop();
-			}
+		}
+		if (shouldStop) {
+			Stop();
 		}
 		break;
 	}
@@ -230,6 +320,10 @@ void UwbRadar::RadarCallback(cherry_radar_event *event, void *userData)
 		break;
 	}
 	case CHERRY_RADAR_EVENT_TYPE_SESSION_STATUS:
+		if (event->data.status &&
+		    event->data.status->session_state == CHERRY_RADAR_SESSION_STATE_DEINIT) {
+			radar->CompleteStop();
+		}
 		break;
 	case CHERRY_RADAR_EVENT_TYPE_SESSION_ERROR:
 		LOG_WRN("Radar session error: 0x%x", static_cast<uint32_t>(event->data.error->status_err));
