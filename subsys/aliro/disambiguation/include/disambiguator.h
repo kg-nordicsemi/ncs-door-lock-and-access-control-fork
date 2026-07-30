@@ -19,6 +19,7 @@ namespace Aliro::Uwb::Disambiguation {
 /** @brief Output of @ref Disambiguator::Process: door decision, phone side, and ranging diagnostics. */
 struct Result {
 	bool mSideIsFront{ false };
+	bool mLibrarySideIsFront{ false };
 	bool mUnlockAllowed{ false };
 	uint16_t mDistanceCm{ 0 };
 	float mMeanPdoaDeg{ 0.0f };
@@ -124,22 +125,15 @@ private:
 		uint32_t distanceCount{ 0 };
 		uint32_t pdoaCount{ 0 };
 		Result lastResult{};
-		/* Soft EWMA confidence score: 0.0 = full BACK, 1.0 = full FRONT.
-		 * Updated each Process() call with adaptive alpha and PDOA veto weighting.
-		 * Hysteresis thresholds on this score replace the old consecutive-count filter. */
+		/* Continuous radar-evidence EWMA: 0.0 = no FRONT evidence, 1.0 = full
+		 * FRONT evidence. Invalid library samples leave it unchanged. */
 		float mFrontScore{ 0.0f };
-		/* Set to true the first time the score crosses FRONT threshold within a session.
-		 * Once set, re-entry into FRONT from BACK uses the slower RE_FRONT_CLIMB_FACTOR
-		 * instead of FRONT_CLIMB_FACTOR, making body-motion false re-detections harder. */
+		/* Selects the absolute cold-start RSL gate before the first confirmed FRONT
+		 * and the relative reference gate afterwards. */
 		bool mHasBeenFront{ false };
-		/* Previous p_ratio for jump-rate detection.
-		 * Body-motion spikes cause p_ratio to jump >2x in a single tick (86 ms).
-		 * Genuine phone approaches ramp up gradually (<1.5x per tick). */
-		float mPrevPRatio{ 0.0f };
-		/* Cooldown ticks remaining after a suspicious p_ratio jump was detected.
-		 * During cooldown the BACK→FRONT climb is reduced to RE_FRONT_CLIMB_FACTOR
-		 * regardless of mHasBeenFront, blocking false FRONT from sudden body-motion spikes. */
-		uint8_t mJumpCooldown{ 0 };
+		/* Cold-start RSL hysteresis is fail-closed until a clearly strong RSL
+		 * sample reaches UWB_RSL_FRONT_ENABLE_DB. */
+		bool mColdStartRslBlocked{ true };
 
 		/* UWB RSL discriminator.
 		 *

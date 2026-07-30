@@ -53,18 +53,19 @@ void LogFrontBackDetectionResult(uint8_t sessionIdx, size_t activeRangingSession
 	const int32_t pdoaMilliDeg = static_cast<int32_t>(result.mMeanPdoaDeg * 1000.0f);
 	const auto pdoa = SplitMilli(pdoaMilliDeg);
 
-	const char *rawStr = result.IsFront() ? "FRONT" : "BACK ";
+	const char *libraryStr = result.mLibrarySideIsFront ? "FRONT" : "BACK ";
+	const char *finalStr = result.IsFront() ? "FRONT" : "BACK ";
 
 #ifdef CONFIG_DOOR_LOCK_ALIRO_UWB_RANGING_SESSION_LOG
-	LOG_INF("[sess:%u|total:%zu] [side] raw:%s | dist:%3dcm | pratio_u6:%7d | cir:%4d | blk:%2d | pdoa:%s%u.%03u",
-		sessionIdx, activeRangingSessions, rawStr, result.mDistanceCm, pRatioU6, result.mCir,
+	LOG_INF("[sess:%u|total:%zu] [side] lib:%s | final:%s | dist:%3dcm | pratio_u6:%7d | cir:%4d | blk:%2d | pdoa:%s%u.%03u",
+		sessionIdx, activeRangingSessions, libraryStr, finalStr, result.mDistanceCm, pRatioU6, result.mCir,
 		result.mNoiseBlocks, pdoa.mSign, pdoa.mInteger, pdoa.mFraction);
 #else
 	ARG_UNUSED(sessionIdx);
 	ARG_UNUSED(activeRangingSessions);
-	LOG_INF("[side] raw:%s | dist:%3dcm | pratio_u6:%7d | cir:%4d | blk:%2d | pdoa:%s%u.%03u", rawStr,
-		result.mDistanceCm, pRatioU6, result.mCir, result.mNoiseBlocks, pdoa.mSign, pdoa.mInteger,
-		pdoa.mFraction);
+	LOG_INF("[side] lib:%s | final:%s | dist:%3dcm | pratio_u6:%7d | cir:%4d | blk:%2d | pdoa:%s%u.%03u",
+		libraryStr, finalStr, result.mDistanceCm, pRatioU6, result.mCir, result.mNoiseBlocks, pdoa.mSign,
+		pdoa.mInteger, pdoa.mFraction);
 #endif
 }
 
