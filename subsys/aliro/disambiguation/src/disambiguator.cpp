@@ -325,7 +325,7 @@ int Disambiguator::Process(Result &out, uint8_t sessionIdx)
 	 * Three tiers:
 	 *
 	 * 1. kUwbRslProtectFactor (slowest) — first approach AND UWB RSL indicates phone is
-	 *    NOT in front (signal too weak: mUwbRslEwma > kUwbRslMaxFrontDb).
+	 *    NOT in front (signal too weak: mUwbRslEwma >= kUwbRslMaxFrontDb).
 	 *    The reference-based RSL veto is inactive when mHasBeenFront=false (no reference),
 	 *    so we use a slow climb rate to prevent body-motion from producing a false first-FRONT
 	 *    when the phone is behind the door.  Once the phone genuinely approaches, RSL drops
@@ -338,7 +338,7 @@ int Disambiguator::Process(Result &out, uint8_t sessionIdx)
 	 *
 	 * 3. kFrontClimbFactor (medium) — first approach, RSL confirms phone is in front
 	 *    (mUwbRslEwma ≤ kUwbRslMaxFrontDb) or no RSL data yet.  Normal first-detection speed. */
-	const bool uwbRslTooWeakForFront = sess.mUwbRslValid && (sess.mUwbRslEwma > kUwbRslMaxFrontDb);
+	const bool uwbRslTooWeakForFront = sess.mUwbRslValid && (sess.mUwbRslEwma >= kUwbRslMaxFrontDb);
 	const bool useReFrontFactor = sess.mHasBeenFront || (sess.mJumpCooldown > 0);
 	const bool useRslProtectFactor = uwbRslTooWeakForFront && !sess.mHasBeenFront;
 	const float climbFactor = useRslProtectFactor ? kUwbRslProtectFactor :
@@ -366,7 +366,7 @@ int Disambiguator::Process(Result &out, uint8_t sessionIdx)
 	 * The slow-climb factor (kUwbRslProtectFactor) alone is insufficient: given enough
 	 * time (>10 s of continuous body motion), the score can still reach the FRONT
 	 * threshold.  When the session has never confirmed FRONT (mHasBeenFront=false) and
-	 * UWB RSL shows the phone is NOT in front (mUwbRslEwma > kUwbRslMaxFrontDb), cap
+	 * UWB RSL shows the phone is NOT in front (mUwbRslEwma >= kUwbRslMaxFrontDb), cap
 	 * the score hard at kLowConfidenceScoreCap (default 500 < FRONT threshold 650).
 	 *
 	 * This makes it physically impossible to reach FRONT on first approach unless the
@@ -389,7 +389,8 @@ int Disambiguator::Process(Result &out, uint8_t sessionIdx)
 	if (out.mSideIsFront) {
 		sess.mHasBeenFront = true;
 
-		/* UWB RSL reference: continuously track in-front RSL while FRONT is confirmed.
+		/* UWB RSL reference: track only while FRONT is confirmed and the RSL veto
+		 * is inactive.
 		 *
 		 * A fixed first-FRONT reference is unreliable: if FRONT was falsely triggered
 		 * (e.g. phone far away or behind door), the reference would be wrong for the
@@ -401,9 +402,14 @@ int Disambiguator::Process(Result &out, uint8_t sessionIdx)
 		 *  • Brief BACK flickers cannot corrupt the reference (tracking only happens
 		 *    when the score is confirmed FRONT, not during BACK).
 		 *  • When phone moves behind door (sustained BACK), the reference stays frozen
-		 *    at the last genuine in-front RSL, giving a stable comparison point. */
+		 *    at the last genuine in-front RSL, giving a stable comparison point.
+		 *
+		 * Do not update while uwbRslVetoed, even if hysteresis still reports FRONT.
+		 * Otherwise the weak behind-door RSL is incorporated into the reference before
+		 * the score crosses the BACK threshold. That reduces the measured drop until
+		 * the veto releases and permits a false re-FRONT. */
 		constexpr float kUwbRefAlpha{ 0.03f };
-		if (sess.mUwbRslValid) {
+		if (sess.mUwbRslValid && !uwbRslVetoed) {
 			if (!sess.mUwbRefSet) {
 				sess.mRefUwbRsl = sess.mUwbRslEwma;
 				sess.mUwbRefSet = true;

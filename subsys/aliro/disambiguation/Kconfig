@@ -297,22 +297,22 @@ config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_UWB_RSL_ALPHA
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_UWB_RSL_MAX_FRONT_DB
 	int "Absolute UWB RSL upper limit for phone-in-front (dBm magnitude, 50-100)"
-	default 75
+	default 72
 	range 50 100
 	help
 	  Absolute UWB RSL gate for the FIRST-approach scenario (mHasBeenFront=false).
 	  rsl_q8 encodes the received-signal level as a positive magnitude: lower value
 	  = stronger signal = phone closer/in-front; higher value = weaker signal =
 	  phone far away or behind a door.
-	  If the smoothed UWB RSL exceeds this threshold while the session has never
-	  confirmed FRONT, the BACK->FRONT climb uses UWB_RSL_PROTECT_FACTOR (slow)
-	  instead of FRONT_CLIMB_FACTOR (fast), preventing body-motion from triggering
-	  a false FRONT on first approach when the phone is behind the door.
+	  If the smoothed UWB RSL is at or above this threshold while the session has
+	  never confirmed FRONT, the score is capped below the FRONT threshold and the
+	  BACK->FRONT climb uses UWB_RSL_PROTECT_FACTOR. This prevents body motion from
+	  triggering a false FRONT on first approach with the phone behind the door.
 	  Typical values:
-	    Phone in front (50-90 cm): RSL ≈ 65-72 dBm magnitude.
-	    Phone behind wooden door:  RSL ≈ 76-82 dBm magnitude.
-	  Default 75 sits safely in the gap for a standard wooden interior door.
-	  Decrease toward 70 for thinner/glass doors; increase toward 80 if false
+	    Phone in front (observed): RSL ≈ 64-69 dBm magnitude.
+	    Phone behind wooden door (observed): RSL ≈ 74-76 dBm magnitude.
+	  Default 72 sits between the measured FRONT and BACK ranges.
+	  Decrease toward 70 for stronger protection; increase if false
 	  protection triggers on legitimate approaches (e.g. when door is fully open).
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_UWB_RSL_PROTECT_FACTOR
@@ -320,7 +320,7 @@ config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_UWB_RSL_PROTECT_FACTOR
 	default 100
 	range 1 1000
 	help
-	  Applied instead of FRONT_CLIMB_FACTOR when the UWB RSL exceeds
+	  Applied instead of FRONT_CLIMB_FACTOR when the UWB RSL is at or above
 	  UWB_RSL_MAX_FRONT_DB AND the session has never confirmed FRONT
 	  (mHasBeenFront=false).  In this state the reference-based RSL veto is not
 	  yet active, so we rely on slow climb rate to prevent body-motion from
