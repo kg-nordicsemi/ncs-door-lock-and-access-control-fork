@@ -30,8 +30,8 @@
 #endif // CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
 
 #ifdef CONFIG_DOOR_LOCK_DISPLAY
-#include "display/display.h"
 #include "aliro/init.h"
+#include "display/display.h"
 #endif // CONFIG_DOOR_LOCK_DISPLAY
 
 #include <crypto_utils/crypto_utils.h>
@@ -766,9 +766,9 @@ void AccessManagerImpl::UnlockAction(bool isNfcSession, const CryptoTypes::Publi
 {
 	VerifyAndCall(mCallbacks.mUnlockIndicatorClb, isNfcSession, accessCredentialPublicKey);
 
-#ifdef CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_RADAR
-	Uwb::UltraWideBandInstance().StopRadarSession();
-#endif // CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_RADAR
+	// #ifdef CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_RADAR
+	// 	Uwb::UltraWideBandInstance().StopRadarSession();
+	// #endif // CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_RADAR
 }
 
 void AccessManagerImpl::LockAction(bool isNfcSession, const CryptoTypes::PublicKey &accessCredentialPublicKey) const
@@ -892,8 +892,8 @@ void AccessManagerImpl::PostDisplayClosestRangingDistance()
 			if (!disambiguationIdx.has_value()) {
 				continue;
 			}
-			const auto result =
-				Aliro::Uwb::Disambiguation::Disambiguator::Instance().TryGetLastResult(*disambiguationIdx);
+			const auto result = Aliro::Uwb::Disambiguation::Disambiguator::Instance().TryGetLastResult(
+				*disambiguationIdx);
 			if (!result.has_value() || !result->IsFront()) {
 				continue;
 			}
@@ -912,13 +912,14 @@ void AccessManagerImpl::PostDisplayClosestRangingDistance()
 	}
 
 #ifdef CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
-	const uint32_t threshold = closestSession->mOpenAllowed
-		? (mMaxAllowedDistance + mMaxAllowedDistanceExitMargin)
-		: static_cast<uint32_t>(CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_SECURE_BUBBLE_CM);
+	const uint32_t threshold =
+		closestSession->mOpenAllowed ?
+			(mMaxAllowedDistance + mMaxAllowedDistanceExitMargin) :
+			static_cast<uint32_t>(CONFIG_DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_SECURE_BUBBLE_CM);
 #else
-	const uint32_t threshold = closestSession->mOpenAllowed
-		? (mMaxAllowedDistance + mMaxAllowedDistanceExitMargin)
-		: mMaxAllowedDistance;
+	const uint32_t threshold = closestSession->mOpenAllowed ?
+					   (mMaxAllowedDistance + mMaxAllowedDistanceExitMargin) :
+					   mMaxAllowedDistance;
 #endif // CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
 
 	display_post_distance_update({ static_cast<int32_t>(closestDistanceCm), static_cast<int32_t>(threshold) });
@@ -940,7 +941,8 @@ void AccessManagerImpl::PostDisplayDisambiguationSide()
 			if (!idx.has_value()) {
 				continue;
 			}
-			const auto result = Aliro::Uwb::Disambiguation::Disambiguator::Instance().TryGetLastResult(*idx);
+			const auto result =
+				Aliro::Uwb::Disambiguation::Disambiguator::Instance().TryGetLastResult(*idx);
 			if (result.has_value()) {
 				anySession = true;
 				if (result->IsFront()) {
