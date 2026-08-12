@@ -134,7 +134,7 @@ void FrontBackDetection::CancelProcessing()
 {
 	mProcessingEnabled = false;
 	k_work_sync sync;
-	(void)k_work_cancel_delayable_sync(&mProcessWork.mDwork, &sync);
+	(void)k_work_cancel_delayable(&mProcessWork.mDwork, &sync);
 }
 
 void FrontBackDetection::ProcessWorkHandler(k_work *work)

@@ -195,7 +195,7 @@ exit:
 void UwbRadar::StopSession()
 {
 	/* CancelStart must run outside mMutex to avoid deadlock with StartSession. */
-	CancelStart();
+	// CancelStart();
 
 	cherry_radar_session *session{};
 	{
@@ -320,8 +320,7 @@ void UwbRadar::RadarCallback(cherry_radar_event *event, void *userData)
 		break;
 	}
 	case CHERRY_RADAR_EVENT_TYPE_SESSION_STATUS:
-		if (event->data.status &&
-		    event->data.status->session_state == CHERRY_RADAR_SESSION_STATE_DEINIT) {
+		if (event->data.status && event->data.status->session_state == CHERRY_RADAR_SESSION_STATE_DEINIT) {
 			radar->CompleteStop();
 		}
 		break;
