@@ -568,8 +568,8 @@
 		  ZAP_ATTRIBUTE_MASK(WRITABLE) | ZAP_ATTRIBUTE_MASK(READABLE) }, /* RequirePINforRemoteOperation */                             \
 		{ ZAP_SIMPLE_DEFAULT(0x181), 0x0000FFFC, 4, ZAP_TYPE(BITMAP32), ZAP_ATTRIBUTE_MASK(READABLE) }, /* FeatureMap                   \
 														 */                             \
-		{ ZAP_SIMPLE_DEFAULT(8), 0x0000FFFD, 2, ZAP_TYPE(INT16U), ZAP_ATTRIBUTE_MASK(READABLE) }, /* ClusterRevision                    \
-													   */                                   \
+		{ ZAP_SIMPLE_DEFAULT(10), 0x0000FFFD, 2, ZAP_TYPE(INT16U), ZAP_ATTRIBUTE_MASK(READABLE) }, /* ClusterRevision                   \
+													    */                                  \
 	}
 
 // clang-format off
