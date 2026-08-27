@@ -277,7 +277,7 @@ Factory data support
    To disable factory data support, set the following Kconfig options to ``n``:
 
    * ``CONFIG_CHIP_FACTORY_DATA``
-   * ``SB_CONFIG_MATTER_FACTORY_DATA_GENERATE``
+   * ``SB_CONFIG_MATTER_ADD_ON_FACTORY_DATA_GENERATE``
 
    To learn more about factory data, read the `Factory provisioning`_ user guide.
 

@@ -4,4 +4,5 @@
 # SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
 #
 
-SB_CONFIG_MATTER_ADD_ON=n
+configdefault MATTER_ADD_ON
+	default n
