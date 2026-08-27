@@ -26,7 +26,7 @@ manifest:
     - name: ncs-door-lock-app-extensions
       remote: ncs
       repo-path: ncs-door-lock-app-extensions
-      revision: v1.1.0
+      revision: f011c5c58a26613ac7db0f5365d21b74b7e2e5e1
       groups:
         - ncs-door-lock-app-extensions
     - name: vendor1
