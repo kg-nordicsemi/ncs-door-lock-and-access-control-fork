@@ -33,9 +33,8 @@ config DOOR_LOCK_RELEASE
 config DOOR_LOCK_DISPLAY
 	bool "Enable display"
 	help
-	  Enables the TFT display with distance, disambiguation side, and lock state visualization.
-	  Use the 'display' snippet to activate this option together with the required board overlay
-	  and LVGL configuration.
+	  Show distance, front/back detection, and lock state on the TFT display.
+	  Enable through the display snippet.
 
 rsource "src/Kconfig"
 

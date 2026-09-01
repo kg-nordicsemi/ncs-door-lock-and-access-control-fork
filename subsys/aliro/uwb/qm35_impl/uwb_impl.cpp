@@ -259,22 +259,12 @@ void UltraWideBandImpl::SessionHandlerCallback(aliro_uwb_session_event *event, v
 			const auto newState = status->session_state;
 			const auto reason = status->reason_code;
 
-			/* DEINIT can arrive from any Cherry session state (e.g. error 10 -
-			 * CHERRY_ERR_SESSION_ACTIVE fires while the session is ACTIVE during a
-			 * Suspend/Resume cycle). Handle it uniformly before the per-state switch so
-			 * that the SessionContext is always torn down and removed from the active
-			 * list, preventing a dangling pointer that would corrupt the heap on the
-			 * next BLE disconnect.
-			 *
-			 * Null mUwbSessionContext immediately: aliro_ccc_cb will call qfree() on the
-			 * Qorvo session object after this callback returns, so the pointer will be
-			 * dangling.  DestroySession() checks for nullptr and skips the call to
-			 * aliro_uwb_session_destroy(), preventing a use-after-free when
-			 * _HandleSessionTermination fires on subsequent BLE disconnect. */
+			/* DEINIT may follow any state. Cherry frees its session after this callback,
+			 * so clear the pointer to prevent a later double free. */
 			if (newState == CHERRY_CCC_SESSION_STATE_DEINIT) {
 				sessionCtx->mRangingSessionState = RangingSessionState::Destroyed;
 				sessionCtx->mUwbSessionContext = nullptr;
-			} else
+			} else {
 				switch (oldState) {
 				case CHERRY_CCC_SESSION_STATE_INIT:
 					if (newState == CHERRY_CCC_SESSION_STATE_INIT) {
@@ -306,6 +296,7 @@ void UltraWideBandImpl::SessionHandlerCallback(aliro_uwb_session_event *event, v
 					// Should not happen, but if it does, set the state to uninitialized.
 					sessionCtx->mRangingSessionState = RangingSessionState::Uninitialized;
 				}
+			}
 
 #ifdef CONFIG_DOOR_LOCK_ALIRO_UWB_SESSION_LOGGING
 

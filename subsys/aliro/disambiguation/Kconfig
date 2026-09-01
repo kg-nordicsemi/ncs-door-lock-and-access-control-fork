@@ -20,72 +20,45 @@ config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_MAX_CIR
 	default 1500
 	range 100 5000
 	help
-	  Maximum absolute CIR value. When the radar CIR exceeds this threshold,
-	  the algorithm reuses the previous FRONT/BACK decision instead of
-	  computing p_ratio. Increase if genuine detections are being skipped.
+	  Maximum CIR value used to calculate p_ratio. Higher values retain more
+	  radar samples.
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_P_RATIO
 	int "Lower p_ratio bound for radar evidence"
 	default 1500
 	range 1 30000
 	help
-	  p_ratio at or below this value contributes zero FRONT radar evidence.
-	  The value is divided by 10000 (1500 means 0.15). Values between this
-	  threshold and P_RATIO_FULL are mapped linearly to a continuous radar
-	  evidence score. Captured logs show that a binary 0.15 threshold accepts
-	  both genuine FRONT and body motion while the phone is behind the door,
-	  so this threshold must not be used as a final side decision.
+	  p_ratio at or below this value produces no FRONT evidence. The value is
+	  divided by 10000; values up to P_RATIO_FULL are mapped linearly.
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_P_RATIO_FULL
 	int "p_ratio yielding full radar evidence"
 	default 5000
 	range 2 30000
 	help
-	  p_ratio at or above this value contributes full FRONT radar evidence.
-	  The value is divided by 10000 (5000 means 0.50). In captured logs,
-	  p_ratio >=0.50 retained about 83 percent of genuine stationary FRONT
-	  samples while reducing phone-behind/body-front samples to about
-	  11 percent. Must be greater than P_RATIO.
+	  p_ratio at or above this value produces full FRONT evidence. The value
+	  is divided by 10000 and must be greater than P_RATIO.
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_NB_BLOCKS
 	int "Max noise blocks threshold for disambiguation"
 	default 12
 	range 0 40
 	help
-	  Maximum number of noise blocks allowed for a FRONT decision.
-	  The library examines 34 overlapping 7-sweep windows in the 40-sweep
-	  measurement window. A block counts as "noise" when its mean CIR
-	  magnitude is below NOISE_THRESHOLD (normal angle) or
-	  SHADOW_NOISE_THRESHOLD (PDOA >150°). For a stationary person,
-	  EMA clutter cancellation (alpha=0.9) suppresses the static reflection,
-	  leaving residuals only in sweeps where micro-motion occurred. With
-	  1–2 active sweeps out of 40 the noise_blocks count is typically 27–33.
-	  The original default of 6 was calibrated for moving targets and
-	  completely blocks stationary FRONT detection. Set to 25 to allow the
-	  stationary case through while still rejecting a truly empty environment
-	  (all 34 blocks noise, no person present at that distance).
+	  Maximum number of low-amplitude blocks allowed for a FRONT decision.
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_NOISE_THRESHOLD
 	int "Noise block amplitude threshold"
 	default 8
 	range 1 100
 	help
-	  CIR magnitude mean below which a 7-sweep block is classified as noise
-	  after EMA clutter cancellation. Set equal to SHADOW_THRESHOLD so that
-	  invalid/random PDOA behind the door cannot select a different amplitude
-	  criterion. The previous values 5/1 produced noise_blocks=0 in every
-	  captured FRONT and BACK sample, making the metric ineffective.
+	  CIR magnitude below which a block is classified as noise.
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_SHADOW_THRESHOLD
 	int "Shadow noise block amplitude threshold"
 	default 8
 	range 1 100
 	help
-	  CIR magnitude mean below which a 7-sweep block is classified as noise
-	  when the library classifies PDOA as being in the shadow region.
-	  Keep equal to NOISE_THRESHOLD: PDOA is valid only in the antenna's
-	  front cone and becomes random behind the door, so it must not alter
-	  the radar amplitude threshold.
+	  CIR magnitude below which a shadow-region block is classified as noise.
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BLIND_DISTANCE_CM
 	int "Blind distance (cm) below which disambiguation is disabled"
@@ -108,29 +81,23 @@ config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_EWMA_ALPHA
 	default 150
 	range 1 1000
 	help
-	  Exponential weighted moving average (EWMA) alpha multiplied by 1000.
-	  For example, 150 means alpha=0.15: each new measurement moves the
-	  soft confidence score by at most 15 % of the remaining distance to
-	  the target. Lower values = slower but more stable transitions;
-	  higher values = faster but noisier response.
+	  EWMA alpha multiplied by 1000. Lower values are slower and more stable.
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_FRONT_SCORE_THRESHOLD
 	int "EWMA score threshold to switch BACK→FRONT (permille, 1-999)"
 	default 650
 	range 1 999
 	help
-	  The soft confidence score (0-1000 permille) must exceed this value
-	  before the side decision switches from BACK to FRONT.
-	  Must be greater than BACK_SCORE_THRESHOLD to create a hysteresis gap.
+	  Score required to switch from BACK to FRONT. Must be greater than
+	  BACK_SCORE_THRESHOLD.
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_BACK_SCORE_THRESHOLD
 	int "EWMA score threshold to switch FRONT→BACK (permille, 1-999)"
 	default 350
 	range 1 999
 	help
-	  The soft confidence score (0-1000 permille) must drop below this
-	  value before the side decision switches from FRONT to BACK.
-	  Must be less than FRONT_SCORE_THRESHOLD to create a hysteresis gap.
+	  Score below which FRONT switches to BACK. Must be less than
+	  FRONT_SCORE_THRESHOLD.
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_PDOA_OFFSET_DEG
 	int "PDOA calibration offset (degrees)"
@@ -154,52 +121,29 @@ config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_UWB_RSL_DROP_DB
 	default 5
 	range 1 30
 	help
-	  UWB signals are attenuated by doors at ~5-15 dB (less than BLE's 15-25 dB).
-	  The UWB RSL (rsl_q8 from ranging diagnostics) is the received signal level
-	  from the PHONE'S UWB transmitter - independent of body reflections.
-	  If the smoothed UWB RSL drops more than this many dB below the reference
-	  captured during confirmed FRONT, the final FRONT result is vetoed.
-	  This works without any HCI overhead since rsl_q8 is already available
-	  from the ranging diagnostic report.
-	  Typical wooden doors attenuate UWB by 5-15 dB.
-	  Decrease toward 5 for thinner/glass doors; increase toward 12 for hollow doors.
+	  RSL drop from the confirmed FRONT reference that vetoes a FRONT result.
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_UWB_RSL_ALPHA
 	int "UWB RSL EWMA smoothing factor (permille, 1-1000)"
 	default 300
 	range 1 1000
 	help
-	  EWMA coefficient for smoothing UWB RSL samples before comparison.
-	  Higher values track rapid RSL changes faster but are noisier.
-	  At 300 (=0.3) the EWMA reaches 95% of a step change in ~9 samples
-	  (~0.6 seconds at ~14 Hz update rate).
+	  EWMA alpha multiplied by 1000 for smoothing UWB RSL samples.
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_UWB_RSL_MAX_FRONT_DB
 	int "Cold-start RSL level that blocks FRONT (dBm magnitude, 50-100)"
 	default 73
 	range 50 100
 	help
-	  Upper edge of the cold-start RSL hysteresis.
-	  rsl_q8 encodes the received-signal level as a positive magnitude: lower value
-	  = stronger signal = phone closer/in-front; higher value = weaker signal =
-	  phone far away or behind a door.
-	  At or above this threshold FRONT is blocked until RSL reaches
-	  UWB_RSL_FRONT_ENABLE_DB. This prevents body motion from triggering a false
-	  FRONT on first approach with the phone behind the door.
-	  Typical values:
-	    Phone in front (observed): RSL ≈ 64-69 dBm magnitude.
-	    Phone behind wooden door (observed): RSL ≈ 74-76 dBm magnitude.
-	  Default 73 is above the one-dB hold band and below the measured BACK range.
+	  RSL magnitude at or above which FRONT is blocked during cold start.
 
 config DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION_UWB_RSL_FRONT_ENABLE_DB
 	int "Cold-start RSL level that enables FRONT (dBm magnitude, 50-100)"
 	default 71
 	range 50 100
 	help
-	  Lower edge of the cold-start RSL hysteresis. FRONT remains blocked until
-	  smoothed RSL is at or below this value. Between this value and
-	  UWB_RSL_MAX_FRONT_DB the previous gate state is retained, preventing
-	  chatter around the boundary. Must be lower than UWB_RSL_MAX_FRONT_DB.
+	  RSL magnitude at or below which FRONT is enabled during cold start.
+	  Must be lower than UWB_RSL_MAX_FRONT_DB.
 
 module = DOOR_LOCK_ALIRO_UWB_DISAMBIGUATION
 module-str = "UWB disambiguation"

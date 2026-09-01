@@ -586,11 +586,9 @@ void AccessManagerImpl::_HandleRangingSessionStateChanged(SessionContext session
 	case RangingSessionState::RangingSuspended:
 		LOG_INF("Ranging state changed to Ranging Suspended (session: %p)", sessionContext.GetRaw());
 
-		// Suspend is a temporary ranging pause, not a session termination. Avoid changing the
-		// physical lock state here because the reader status update can immediately trigger resume.
+		/* Keep the physical lock state unchanged during a temporary ranging pause. */
 		SetOpenAllowed(sessionContext, false, !IsOpenAllowed());
 #if defined(CONFIG_DOOR_LOCK_DISPLAY) && defined(CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION)
-		/* Suspend = user not detected; keep disambiguation icon visible but show "not detected". */
 		display_refresh_disambiguation_side(false);
 #endif // CONFIG_DOOR_LOCK_DISPLAY && CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
 #if defined(CONFIG_DOOR_LOCK_DISPLAY) && defined(CONFIG_DOOR_LOCK_BLE_UWB)
@@ -627,12 +625,14 @@ void AccessManagerImpl::_HandleRangingSessionData(SessionContext sessionContext,
 
 #ifdef CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
 	{
-		const auto id = Uwb::UltraWideBandInstance().GetDisambiguationSessionIdx(sessionContext);
-		const auto result =
-			id ? Aliro::Uwb::Disambiguation::Disambiguator::Instance().TryGetLastResult(*id) : std::nullopt;
-		const char *sideStr = result.has_value() ? (result->IsFront() ? "FRONT" : "BACK") : "----";
+		const auto sessionIndex = Uwb::UltraWideBandInstance().GetDisambiguationSessionIdx(sessionContext);
+		const auto result = sessionIndex ?
+					    Aliro::Uwb::Disambiguation::Disambiguator::Instance().TryGetLastResult(
+						    *sessionIndex) :
+					    std::nullopt;
+		const char *side = result.has_value() ? (result->IsFront() ? "FRONT" : "BACK") : "----";
 		LOG_INF("session %p | %-16s | %s", sessionContext.GetRaw(),
-			openAllowed ? "OPEN ALLOWED" : "OPEN NOT ALLOWED", sideStr);
+			openAllowed ? "OPEN ALLOWED" : "OPEN NOT ALLOWED", side);
 	}
 #else
 	LOG_INF("session %p | %s", sessionContext.GetRaw(), openAllowed ? "OPEN ALLOWED" : "OPEN NOT ALLOWED");
@@ -765,10 +765,6 @@ AliroError AccessManagerImpl::_GetPublicKey(size_t keyIndex, CryptoTypes::Public
 void AccessManagerImpl::UnlockAction(bool isNfcSession, const CryptoTypes::PublicKey &accessCredentialPublicKey) const
 {
 	VerifyAndCall(mCallbacks.mUnlockIndicatorClb, isNfcSession, accessCredentialPublicKey);
-
-	// #ifdef CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_RADAR
-	// 	Uwb::UltraWideBandInstance().StopRadarSession();
-	// #endif // CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_RADAR
 }
 
 void AccessManagerImpl::LockAction(bool isNfcSession, const CryptoTypes::PublicKey &accessCredentialPublicKey) const
@@ -928,7 +924,7 @@ void AccessManagerImpl::PostDisplayClosestRangingDistance()
 void AccessManagerImpl::PostDisplayDisambiguationSide()
 {
 	bool isFront = false;
-	bool anySession = false;
+	bool hasResult = false;
 
 	{
 		MutexGuard lock{ sMutex };
@@ -944,21 +940,21 @@ void AccessManagerImpl::PostDisplayDisambiguationSide()
 			const auto result =
 				Aliro::Uwb::Disambiguation::Disambiguator::Instance().TryGetLastResult(*idx);
 			if (result.has_value()) {
-				anySession = true;
+				hasResult = true;
 				if (result->IsFront()) {
 					isFront = true;
 					break;
 				}
 			}
 #else
-			anySession = true;
+			hasResult = true;
 			ARG_UNUSED(sessionCtx);
 			break;
 #endif // CONFIG_DOOR_LOCK_ALIRO_UWB_QM35_FRONT_BACK_DETECTION
 		}
 	}
 
-	if (anySession) {
+	if (hasResult) {
 		display_post_disambiguation_side(isFront);
 	}
 }

@@ -1,0 +1,20 @@
+sample:
+  name: Minimal nRF54LM20 BLE SMP DFU
+  description: Minimal MCUboot firmware update server over Bluetooth LE
+
+common:
+  sysbuild: true
+  build_only: true
+  platform_allow:
+    - nrf54lm20dk/nrf54lm20a/cpuapp
+    - nrf54lm20dk/nrf54lm20b/cpuapp
+  tags:
+    - bluetooth
+    - dfu
+    - mcumgr
+
+tests:
+  sample.dfu_smp_ble:
+    integration_platforms:
+      - nrf54lm20dk/nrf54lm20a/cpuapp
+      - nrf54lm20dk/nrf54lm20b/cpuapp

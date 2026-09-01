@@ -74,8 +74,7 @@ int UwbRadar::ScheduleStart()
 		MutexGuard lock{ mMutex };
 
 		if (mState == LifecycleState::Stopping) {
-			/* A ranging session resumed before the previous radar session reached
-			 * DEINIT. Coalesce repeated requests and restart after DEINIT. */
+			/* Restart once the pending teardown reaches DEINIT. */
 			mStartRequestedDuringStop = true;
 			return 0;
 		}
@@ -84,11 +83,11 @@ int UwbRadar::ScheduleStart()
 		mState = LifecycleState::Starting;
 	}
 
-	const int ret = k_work_submit(&mStartWork.mWork);
-	if (ret < 0) {
+	const int status = k_work_submit(&mStartWork.mWork);
+	if (status < 0) {
 		MutexGuard lock{ mMutex };
 		mState = LifecycleState::Stopped;
-		return ret;
+		return status;
 	}
 	return 0;
 }
@@ -104,18 +103,12 @@ void UwbRadar::Stop()
 		mState = LifecycleState::Stopping;
 	}
 
-	const int ret = k_work_submit(&mStopWork.mWork);
-	if (ret < 0) {
+	const int status = k_work_submit(&mStopWork.mWork);
+	if (status < 0) {
 		MutexGuard lock{ mMutex };
 		mState = previousState;
-		LOG_ERR("Failed to schedule radar session stop: %d", ret);
+		LOG_ERR("Failed to schedule radar session stop: %d", status);
 	}
-}
-
-void UwbRadar::CancelStart()
-{
-	k_work_sync sync;
-	(void)k_work_cancel_sync(&mStartWork.mWork, &sync);
 }
 
 void UwbRadar::StartWorkHandler(k_work *work)
@@ -194,9 +187,6 @@ exit:
 
 void UwbRadar::StopSession()
 {
-	/* CancelStart must run outside mMutex to avoid deadlock with StartSession. */
-	// CancelStart();
-
 	cherry_radar_session *session{};
 	{
 		MutexGuard lock{ mMutex };
@@ -211,8 +201,7 @@ void UwbRadar::StopSession()
 		return;
 	}
 
-	/* Destruction is asynchronous. A new radar session is not allowed until
-	 * RadarCallback receives DEINIT for this object. */
+	/* Wait for DEINIT before allowing a new session. */
 	cherry_radar_session_destroy(session);
 	LOG_INF("Radar session teardown requested");
 }
@@ -263,7 +252,6 @@ void UwbRadar::HandleSessionEvent(const aliro_uwb_session_event &event, const Se
 				if (mActiveSessionCount > 0) {
 					mActiveSessionCount--;
 				}
-				// Stop radar only when the last ranging session ends.
 				shouldStop = (mActiveSessionCount == 0);
 			}
 		}

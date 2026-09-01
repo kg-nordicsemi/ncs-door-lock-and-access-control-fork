@@ -5,7 +5,7 @@
 #
 
 config DISPLAY_THREAD_PRIORITY
-	int "Maximum length of single command in Bytes"
+	int "Display thread priority"
 	default 11
 	help
 	  Priority of the display thread.

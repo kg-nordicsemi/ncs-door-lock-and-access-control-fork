@@ -43,9 +43,7 @@ public:
 	void Init(cherry *ctx, OnRadarMeasurement onRadarMeasurement = nullptr,
 		  OnSessionStopped onSessionStopped = nullptr);
 
-	/**
-	 * @brief Stop an active radar session and cancel any pending start.
-	 */
+	/** Stop the active radar session. */
 	void Stop();
 
 	/** @brief Schedule radar session start.
@@ -77,7 +75,6 @@ private:
 	static void OnSessionEvent(const aliro_uwb_session_event &event, const SessionContext &sessionCtx, void *ctx);
 	static void RadarCallback(cherry_radar_event *event, void *userData);
 
-	void CancelStart();
 	int StartSession();
 	void StopSession();
 	void CompleteStop();

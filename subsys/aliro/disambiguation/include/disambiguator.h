@@ -125,30 +125,16 @@ private:
 		uint32_t distanceCount{ 0 };
 		uint32_t pdoaCount{ 0 };
 		Result lastResult{};
-		/* Continuous radar-evidence EWMA: 0.0 = no FRONT evidence, 1.0 = full
-		 * FRONT evidence. Invalid library samples leave it unchanged. */
+		/** Smoothed radar evidence in the [0, 1] range. */
 		float mFrontScore{ 0.0f };
-		/* Selects the absolute cold-start RSL gate before the first confirmed FRONT
-		 * and the relative reference gate afterwards. */
+		/** Selects the relative RSL gate after the first confirmed FRONT. */
 		bool mHasBeenFront{ false };
-		/* Cold-start RSL hysteresis is fail-closed until a clearly strong RSL
-		 * sample reaches UWB_RSL_FRONT_ENABLE_DB. */
+		/** Cold-start RSL hysteresis state. */
 		bool mColdStartRslBlocked{ true };
-
-		/* UWB RSL discriminator.
-		 *
-		 * The UWB Received Signal Level (rsl_q8, signed Q8.8 dBm) comes from the
-		 * ranging diagnostic report and measures the UWB signal received from the
-		 * PHONE itself — independent of body reflections detected by the radar.
-		 * When the phone moves behind the door, the UWB RSL drops by ~5-15 dB
-		 * (door attenuation at 6.5 GHz), providing a physics-based discriminator.
-		 *
-		 * mUwbRslEwma  — smoothed UWB RSL in dBm (EWMA of rsl_q8 / 256.0).
-		 * mUwbRslValid — true once at least one valid RSL sample has been received.
-		 * mRefUwbRsl   — RSL captured when FRONT was first confirmed.
-		 * mUwbRefSet   — true when mRefUwbRsl has been captured. */
+		/** Smoothed UWB received signal level in dBm. */
 		float mUwbRslEwma{ 0.0f };
 		bool mUwbRslValid{ false };
+		/** RSL reference captured for a confirmed FRONT result. */
 		float mRefUwbRsl{ 0.0f };
 		bool mUwbRefSet{ false };
 	};

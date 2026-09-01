@@ -19,7 +19,6 @@
 #include <doorlock/utils/mutex_guard.h>
 #include <doorlock/utils/utils.h>
 
-#include <zephyr/bluetooth/conn.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/slist.h>
@@ -217,12 +216,7 @@ void FrontBackDetection::HandleSessionEvent(const aliro_uwb_session_event &event
 				LOG_INF("Front/back detection reset for new ranging session");
 				ScheduleProcessing();
 			} else if (sessionCtx.mRangingSessionState == RangingSessionState::RangingSuspended) {
-				/* Resume belongs to the same authenticated phone session. Preserve the
-				 * disambiguation state, especially the in-front UWB RSL reference.
-				 *
-				 * Resetting here allowed a phone already behind the door to establish
-				 * its weak RSL as a new FRONT baseline. The reference-based UWB veto
-				 * then saw drop=0 dB and body motion could cause a false FRONT. */
+				/* Preserve the authenticated session's RSL reference after resume. */
 				LOG_INF("Front/back detection state preserved on ranging session resume");
 				ScheduleProcessing();
 			}

@@ -1,0 +1,25 @@
+patches:
+  - path: vendor1/vendor1.patch
+    sha256sum: bc557d0b0addfaf50d66f9c47699478c7e7074f9fbb03063b1a4bf9a4044d5de
+    module: qm35-aliro-sdk/project/cherry/vendor1
+    author: Marcin Kajor
+    email: marcin.kajor@nordicsemi.no
+    date: 2026-04-28
+  - path: nrf/dfu_extra.patch
+    sha256sum: 9ddd8de5dbda9722de0f93f93ba12911878e0b1feaedc725feb2102f75ac3406
+    module: nrf
+    author: Adrian Gielniewski
+    email: adrian.gielniewski@nordicsemi.no
+    date: 2026-07-23
+  - path: qm35-aliro-sdk/fix_uaf_session_free.patch
+    sha256sum: 1f7346bcf501a76074da6d5290ccea6c58f3560a29de6f12ab5b2c55ad0ad836
+    module: qm35-aliro-sdk
+    author: Konrad Grucel
+    email: konrad.grucel@nordicsemi.no
+    date: 2026-07-22
+  - path: qm35-aliro-sdk/recover_missing_session_start_response.patch
+    sha256sum: 7cb85c6449880ef095f38affac02a92de3690e94eef4379be304ecb98aa9e594
+    module: qm35-aliro-sdk
+    author: Konrad Grucel
+    email: konrad.grucel@nordicsemi.no
+    date: 2026-07-30
