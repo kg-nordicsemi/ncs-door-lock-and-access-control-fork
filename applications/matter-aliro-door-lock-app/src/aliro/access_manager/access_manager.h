@@ -219,6 +219,13 @@ public:
 	void HandleRangingSessionStateChanged(SessionContext sessionContext, RangingSessionState state);
 
 	/**
+	 * @brief Suspends all active UWB ranging sessions.
+	 *
+	 * Sessions suspended by this method do not trigger a lock action.
+	 */
+	void SuspendActiveRangingSessions();
+
+	/**
 	 * @brief Handles the session termination.
 	 *
 	 * @param sessionContext The session context.

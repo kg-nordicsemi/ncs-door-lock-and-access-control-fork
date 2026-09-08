@@ -599,6 +599,22 @@ uint32_t AccessManagerImpl::_GetMaxAllowedDistance()
 void AccessManagerImpl::_HandleRangingSessionStateChanged(SessionContext sessionContext, RangingSessionState state)
 {
 #ifdef CONFIG_DOOR_LOCK_BLE_UWB
+	bool suspendedOnUnsecured = false;
+
+	{
+		MutexGuard lock{ sMutex };
+		auto *rangingSessionCtx = FindRangingSession(sessionContext);
+
+		if (rangingSessionCtx) {
+			rangingSessionCtx->mRangingState = state;
+			suspendedOnUnsecured = rangingSessionCtx->mSuspendOnUnsecuredPending;
+
+			if (state == RangingSessionState::RangingResumed || state == RangingSessionState::Destroyed) {
+				rangingSessionCtx->mSuspendOnUnsecuredPending = false;
+			}
+		}
+	}
+
 	switch (state) {
 	case RangingSessionState::Ranging:
 		LOG_INF("Ranging state changed to Ranging (session: %p)", sessionContext.GetRaw());
@@ -606,8 +622,8 @@ void AccessManagerImpl::_HandleRangingSessionStateChanged(SessionContext session
 	case RangingSessionState::RangingSuspended:
 		LOG_INF("Ranging state changed to Ranging Suspended (session: %p)", sessionContext.GetRaw());
 
-		// Only update ReaderState if no other session allows open (prevents rapid toggling after Suspend).
-		SetOpenAllowed(sessionContext, false, !IsOpenAllowed());
+		// Suspending because the lock is unsecured must not immediately request locking.
+		SetOpenAllowed(sessionContext, false, !suspendedOnUnsecured && !IsOpenAllowed());
 		break;
 	case RangingSessionState::RangingResumed:
 		LOG_INF("Ranging state changed to Ranging Resumed (session: %p)", sessionContext.GetRaw());
@@ -624,6 +640,33 @@ void AccessManagerImpl::_HandleRangingSessionStateChanged(SessionContext session
 #else // CONFIG_DOOR_LOCK_BLE_UWB
 	ARG_UNUSED(sessionContext);
 	ARG_UNUSED(state);
+#endif // CONFIG_DOOR_LOCK_BLE_UWB
+}
+
+void AccessManagerImpl::_SuspendActiveRangingSessions()
+{
+#ifdef CONFIG_DOOR_LOCK_BLE_UWB
+	MutexGuard lock{ sMutex };
+	RangingSessionContext *rangingSessionCtx{};
+
+	SYS_SLIST_FOR_EACH_CONTAINER (&mActiveSessions, rangingSessionCtx, mNode) {
+		const bool isActive = rangingSessionCtx->mRangingState == RangingSessionState::Ranging ||
+				      rangingSessionCtx->mRangingState == RangingSessionState::RangingResumed;
+
+		if (!isActive || rangingSessionCtx->mSuspendOnUnsecuredPending) {
+			continue;
+		}
+
+		rangingSessionCtx->mSuspendOnUnsecuredPending = true;
+		const int status =
+			Uwb::UltraWideBandInstance().SuspendRangingSession(rangingSessionCtx->mSessionContext);
+
+		if (status != 0) {
+			rangingSessionCtx->mSuspendOnUnsecuredPending = false;
+			LOG_ERR("Failed to suspend UWB ranging session %p: %d",
+				rangingSessionCtx->mSessionContext.GetRaw(), status);
+		}
+	}
 #endif // CONFIG_DOOR_LOCK_BLE_UWB
 }
 

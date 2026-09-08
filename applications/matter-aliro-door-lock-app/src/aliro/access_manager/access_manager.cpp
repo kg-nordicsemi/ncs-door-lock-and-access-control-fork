@@ -103,6 +103,11 @@ void AccessManager::HandleRangingSessionStateChanged(SessionContext sessionConte
 	return Impl()->_HandleRangingSessionStateChanged(sessionContext, state);
 }
 
+void AccessManager::SuspendActiveRangingSessions()
+{
+	return Impl()->_SuspendActiveRangingSessions();
+}
+
 void AccessManager::HandleSessionTermination(SessionContext sessionContext)
 {
 	return Impl()->_HandleSessionTermination(sessionContext);

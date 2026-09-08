@@ -205,6 +205,11 @@ private:
 	void _HandleRangingSessionStateChanged(SessionContext sessionContext, RangingSessionState state);
 
 	/**
+	 * @brief Suspends all active UWB ranging sessions.
+	 */
+	void _SuspendActiveRangingSessions();
+
+	/**
 	 * @brief Handles the session termination.
 	 *
 	 * @param sessionContext The session context.
@@ -344,6 +349,8 @@ private:
 		sys_snode_t mNode{};
 		SessionContext mSessionContext;
 		bool mOpenAllowed{ false };
+		bool mSuspendOnUnsecuredPending{ false };
+		RangingSessionState mRangingState{ RangingSessionState::Idle };
 		CryptoTypes::PublicKey mAccessCredentialPublicKey;
 #ifdef CONFIG_DOOR_LOCK_ACCESS_MANAGER_TERMINATE_SESSION_ON_TIMEOUT
 		Timer mRangingSessionTimer;
