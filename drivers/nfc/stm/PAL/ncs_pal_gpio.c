@@ -19,10 +19,9 @@ static const struct gpio_dt_spec irq_gpio = GPIO_DT_SPEC_GET(DT_INST(0, x_nucleo
 // The reset GPIO is optional, so we use GPIO_DT_SPEC_GET_OR to avoid errors if it is not defined.
 static const struct gpio_dt_spec reset_gpio = GPIO_DT_SPEC_GET_OR(DT_INST(0, x_nucleo_nfc), reset_gpios, { 0 });
 
-// TODO: This should be moved to the nRF54L style shield.
-#ifdef CONFIG_BOARD_NRF54L15DK
+#if DT_NODE_HAS_STATUS(DT_NODELABEL(nfc_power_switch), okay)
 static const struct gpio_dt_spec nfc_pwr_switch = GPIO_DT_SPEC_GET(DT_NODELABEL(nfc_power_switch), gpios);
-#endif // CONFIG_BOARD_NRF54L15DK
+#endif
 
 static void irq_pin_cb(const struct device *gpiob, struct gpio_callback *cb, uint32_t pins)
 {
@@ -34,11 +33,10 @@ static void irq_pin_cb(const struct device *gpiob, struct gpio_callback *cb, uin
 	ncs_pal_isr_trigger();
 }
 
-// TODO: The function should be moved to the nRF54L style shield.
 int ncs_pal_pwr_pin_set()
 {
 	int err = 0;
-#ifdef CONFIG_BOARD_NRF54L15DK
+#if DT_NODE_HAS_STATUS(DT_NODELABEL(nfc_power_switch), okay)
 	if (!gpio_is_ready_dt(&nfc_pwr_switch)) {
 		LOG_ERR("The NFC Power switch pin GPIO port is not ready");
 		return -ENODEV;
@@ -48,7 +46,7 @@ int ncs_pal_pwr_pin_set()
 	if (err) {
 		LOG_ERR("Configuring GPIO pin failed: %d", err);
 	}
-#endif // CONFIG_BOARD_NRF54L15DK
+#endif
 	return err;
 }
 
